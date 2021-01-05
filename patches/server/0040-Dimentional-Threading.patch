@@ -4,6 +4,19 @@ Date: Mon, 4 Jan 2021 21:06:13 -0500
 Subject: [PATCH] Dimentional Threading
 
 
+diff --git a/src/main/java/com/tuinity/tuinity/util/TickThread.java b/src/main/java/com/tuinity/tuinity/util/TickThread.java
+index 08ed243259f052165c6f75aed1d1d65a14219715..d2076df77817a5d0353a078d213053b04639992b 100644
+--- a/src/main/java/com/tuinity/tuinity/util/TickThread.java
++++ b/src/main/java/com/tuinity/tuinity/util/TickThread.java
+@@ -22,7 +22,7 @@ public final class TickThread extends Thread {
+ 
+ 
+     public static void ensureTickThread(final String reason) {
+-        if (!Bukkit.isPrimaryThread()) {
++        if (!(Bukkit.isPrimaryThread() || me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread()))) {
+             MinecraftServer.LOGGER.fatal("Thread " + Thread.currentThread().getName() + " failed main thread check: " + reason, new Throwable());
+             throw new IllegalStateException(reason);
+         }
 diff --git a/src/main/java/me/titaniumtown/DimThread/DimThread.java b/src/main/java/me/titaniumtown/DimThread/DimThread.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..6b1e1ca4e8202e44edd00d4b6ff7005d7eb3f282
@@ -342,6 +355,41 @@ index 83e3dcbbe36ce1f947f387ec55067e51a1b7384a..8f9ccb3cf09feecfaa1d01f7e1641d98
  //            return null;
  //        } else {
              return this.getChunkAtIfLoadedMainThread(i, j); // Paper - optimise for loaded chunks
+diff --git a/src/main/java/net/minecraft/server/IAsyncTaskHandler.java b/src/main/java/net/minecraft/server/IAsyncTaskHandler.java
+index 27db247aa40e0516302c74b9bf00c631a8607af5..4537e6ec20a08ae57e2d71a9851379351a81d33d 100644
+--- a/src/main/java/net/minecraft/server/IAsyncTaskHandler.java
++++ b/src/main/java/net/minecraft/server/IAsyncTaskHandler.java
+@@ -25,7 +25,7 @@ public abstract class IAsyncTaskHandler<R extends Runnable> implements Mailbox<R
+     protected abstract boolean canExecute(R r0);
+ 
+     public boolean isMainThread() {
+-        return Thread.currentThread() == this.getThread();
++        return me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread());
+     }
+ 
+     protected abstract Thread getThread();
+diff --git a/src/main/java/net/minecraft/server/MCUtil.java b/src/main/java/net/minecraft/server/MCUtil.java
+index e79e773f2219f9a9ae076fcbc8108b792201b11a..271ec0f02c41b4dd01457b084aca1ef550931138 100644
+--- a/src/main/java/net/minecraft/server/MCUtil.java
++++ b/src/main/java/net/minecraft/server/MCUtil.java
+@@ -362,7 +362,7 @@ public final class MCUtil {
+      * @return
+      */
+     public static void ensureMain(String reason, Runnable run) {
+-        if (AsyncCatcher.enabled && Thread.currentThread() != MinecraftServer.getServer().serverThread) {
++        if (AsyncCatcher.enabled && !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             if (reason != null) {
+                 new IllegalStateException("Asynchronous " + reason + "!").printStackTrace();
+             }
+@@ -387,7 +387,7 @@ public final class MCUtil {
+      * @return
+      */
+     public static <T> T ensureMain(String reason, Supplier<T> run) {
+-        if (AsyncCatcher.enabled && Thread.currentThread() != MinecraftServer.getServer().serverThread) {
++        if (AsyncCatcher.enabled && !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             if (reason != null) {
+                 new IllegalStateException("Asynchronous " + reason + "! Blocking thread until it returns ").printStackTrace();
+             }
 diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
 index 68471de8f7e8ee10ac1f85e919aee4db4c6ba008..b7a98b228f08f09868a5be1923fcb139eb7bb2b1 100644
 --- a/src/main/java/net/minecraft/server/MinecraftServer.java
@@ -661,7 +709,7 @@ index 68471de8f7e8ee10ac1f85e919aee4db4c6ba008..b7a98b228f08f09868a5be1923fcb139
              this.getPlayerList().reload();
              this.customFunctionData.a(this.dataPackResources.a());
 diff --git a/src/main/java/net/minecraft/server/World.java b/src/main/java/net/minecraft/server/World.java
-index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..542f87cc1cfd66310c718d28fe4916552d71fd4c 100644
+index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..5acc247baa503387dcb5776f107a18af08e73cc6 100644
 --- a/src/main/java/net/minecraft/server/World.java
 +++ b/src/main/java/net/minecraft/server/World.java
 @@ -32,8 +32,22 @@ import org.bukkit.craftbukkit.block.CraftBlockState;
@@ -688,6 +736,24 @@ index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..542f87cc1cfd66310c718d28fe491655
  
      protected static final Logger LOGGER = LogManager.getLogger();
      public static final Codec<ResourceKey<World>> f = MinecraftKey.a.xmap(ResourceKey.b(IRegistry.L), ResourceKey::a);
+@@ -45,7 +59,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
+     public final List<TileEntity> tileEntityListTick = Lists.newArrayList();
+     protected final List<TileEntity> tileEntityListPending = Lists.newArrayList();
+     protected final java.util.Set<TileEntity> tileEntityListUnload = com.google.common.collect.Sets.newHashSet();
+-    public final Thread serverThread;
++    // public final Thread serverThread;
+     private final boolean debugWorld;
+     private int d;
+     protected int n = (new Random()).nextInt();
+@@ -233,7 +247,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
+             this.worldBorder = new WorldBorder();
+         }
+ 
+-        this.serverThread = Thread.currentThread();
++        // this.serverThread = Thread.currentThread();
+         this.biomeManager = new BiomeManager(this, i, dimensionmanager.getGenLayerZoomer());
+         this.debugWorld = flag1;
+         // CraftBukkit start
 @@ -1112,7 +1126,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
          // CraftBukkit end
          if (isOutsideWorld(blockposition)) {
@@ -719,6 +785,32 @@ index 0e2bbf292be2bd20b01ec6e630ea3d8a8e8d3cc8..6322f50b97f4318556a222ffca1fcb97
              // SPIGOT-5378: avoid deadlock, this can be called in loading logic (i.e lighting) but getType() will block on chunk load
              return result;
          }
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index 491c91fa4c8901c5c3ec61679508211556164890..20e68187884dabd6299a8ff65cd5cfc0ad89fc70 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -1868,7 +1868,7 @@ public final class CraftServer implements Server {
+     public boolean isPrimaryThread() {
+         // Tuinity start
+         final Thread currThread = Thread.currentThread();
+-        return currThread == console.serverThread || currThread instanceof com.tuinity.tuinity.util.TickThread || currThread.equals(net.minecraft.server.MinecraftServer.getServer().shutdownThread); // Paper - Fix issues with detecting main thread properly, the only time Watchdog will be used is during a crash shutdown which is a "try our best" scenario
++        return me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread()) || currThread == console.serverThread || currThread instanceof com.tuinity.tuinity.util.TickThread || currThread.equals(net.minecraft.server.MinecraftServer.getServer().shutdownThread); // Paper - Fix issues with detecting main thread properly, the only time Watchdog will be used is during a crash shutdown which is a "try our best" scenario
+         // Tuinity End
+     }
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
+index 8904b39db2203118fe3589133cb7e64334c20f33..71849d76fe1865ebe2b49499e2317b784976fa07 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
+@@ -469,7 +469,7 @@ public class CraftWorld implements World {
+     @Override
+     public Chunk[] getLoadedChunks() {
+         // Paper start
+-        if (Thread.currentThread() != world.getMinecraftWorld().serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             synchronized (world.getChunkProvider().playerChunkMap.visibleChunks) {
+                 Long2ObjectLinkedOpenHashMap<PlayerChunk> chunks = world.getChunkProvider().playerChunkMap.visibleChunks;
+                 return chunks.values().stream().map(PlayerChunk::getFullChunk).filter(Objects::nonNull).map(net.minecraft.server.Chunk::getBukkitChunk).toArray(Chunk[]::new);
 diff --git a/src/main/java/org/spigotmc/AsyncCatcher.java b/src/main/java/org/spigotmc/AsyncCatcher.java
 index 51e9c54cddf4b28ba3d3d892322c487774bdab70..d4673792aba012a928a038376e7da243acf559e7 100644
 --- a/src/main/java/org/spigotmc/AsyncCatcher.java
