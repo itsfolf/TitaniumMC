@@ -260,12 +260,12 @@ index 83e3dcbbe36ce1f947f387ec55067e51a1b7384a..d846fa2fb41f64115dd6f6d4f2468f47
      public final ChunkProviderServer.a serverThreadQueue; // Paper private -> public
      public final PlayerChunkMap playerChunkMap;
 diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
-index 1fd7cec23b0e5cec99065af26b7182944ea7893e..9975c070b4ebffaef3fb8dd9515aa18ea18a29b1 100644
+index 68471de8f7e8ee10ac1f85e919aee4db4c6ba008..cf1106f5ff611a9e25dedaf81f7e14f5680afd49 100644
 --- a/src/main/java/net/minecraft/server/MinecraftServer.java
 +++ b/src/main/java/net/minecraft/server/MinecraftServer.java
-@@ -71,8 +71,20 @@ import org.bukkit.event.server.ServerLoadEvent;
- import co.aikar.timings.MinecraftTimings; // Paper
+@@ -66,8 +66,20 @@ import co.aikar.timings.MinecraftTimings; // Paper
  import io.papermc.paper.util.PaperJvmChecker; // Paper
+ import io.papermc.paper.event.server.ServerResourcesReloadedEvent; // Paper
  import org.spigotmc.SlackActivityAccountant; // Spigot
 +// Titanium start - imports for DIM-threading
 +import me.titaniumtown.dimthread.DimThread;
@@ -284,7 +284,7 @@ index 1fd7cec23b0e5cec99065af26b7182944ea7893e..9975c070b4ebffaef3fb8dd9515aa18e
  
      private static MinecraftServer SERVER; // Paper
      public static final Logger LOGGER = LogManager.getLogger();
-@@ -1358,117 +1370,174 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+@@ -1353,117 +1365,174 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
      }
  
      protected void b(BooleanSupplier booleansupplier) {
@@ -553,7 +553,7 @@ index 1fd7cec23b0e5cec99065af26b7182944ea7893e..9975c070b4ebffaef3fb8dd9515aa18e
      }
  
      public boolean getAllowNether() {
-@@ -1500,9 +1569,11 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+@@ -1495,9 +1564,11 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
          return this.worldServer.keySet();
      }
  
