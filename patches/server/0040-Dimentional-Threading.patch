@@ -6,10 +6,10 @@ Subject: [PATCH] Dimentional Threading
 
 diff --git a/src/main/java/me/titaniumtown/DimThread/DimThread.java b/src/main/java/me/titaniumtown/DimThread/DimThread.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..2be788a4362d4a84266cc4f509cd6c69703a7e1a
+index 0000000000000000000000000000000000000000..6b1e1ca4e8202e44edd00d4b6ff7005d7eb3f282
 --- /dev/null
 +++ b/src/main/java/me/titaniumtown/DimThread/DimThread.java
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,53 @@
 +package me.titaniumtown.dimthread;
 +
 +import me.titaniumtown.dimthread.thread.IMutableMainThread;
@@ -57,6 +57,8 @@ index 0000000000000000000000000000000000000000..2be788a4362d4a84266cc4f509cd6c69
 +    /**
 +        * Checks if the given thread is a dimthread worker by checking the name. Probably quite fragile...
 +        * */
++    // `Thread.currentThread() == this.serverThread` is the same as `me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())`
++    // `Thread.currentThread() != this.serverThread` is the same as `!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())`
 +    public static boolean owns(Thread thread) {
 +        return thread.getName().startsWith(MOD_ID);
 +    }
@@ -122,7 +124,7 @@ index 0000000000000000000000000000000000000000..7871ea9f536b4ab907ff64493905aa74
 +}
 \ No newline at end of file
 diff --git a/src/main/java/me/titaniumtown/TitaniumConfig.java b/src/main/java/me/titaniumtown/TitaniumConfig.java
-index 4737daae4b0acd65dbbc5e56134885c50ce36e64..03803242d9e90649e95d10d12996b5e2614770b7 100644
+index 4737daae4b0acd65dbbc5e56134885c50ce36e64..e42dccedd0961ae9672f615e4e07f43b9925c9f7 100644
 --- a/src/main/java/me/titaniumtown/TitaniumConfig.java
 +++ b/src/main/java/me/titaniumtown/TitaniumConfig.java
 @@ -156,10 +156,14 @@ public class TitaniumConfig {
@@ -146,7 +148,7 @@ index 4737daae4b0acd65dbbc5e56134885c50ce36e64..03803242d9e90649e95d10d12996b5e2
      public static int replace3 = biggestInt + 16; // replacement for 30000000
 -
 +    
-+    public static boolean DEBUG = true;
++    public static boolean DEBUG = true; // Used for DIM-threading debugging
  }
 diff --git a/src/main/java/me/titaniumtown/threading/ThreadPool.java b/src/main/java/me/titaniumtown/threading/ThreadPool.java
 new file mode 100644
@@ -225,7 +227,7 @@ index 0000000000000000000000000000000000000000..ba0e02a4cb5db227741c6ad5a4697587
 +
 +}
 diff --git a/src/main/java/net/minecraft/server/ChunkProviderServer.java b/src/main/java/net/minecraft/server/ChunkProviderServer.java
-index 83e3dcbbe36ce1f947f387ec55067e51a1b7384a..d846fa2fb41f64115dd6f6d4f2468f476da116d3 100644
+index 83e3dcbbe36ce1f947f387ec55067e51a1b7384a..8f9ccb3cf09feecfaa1d01f7e1641d98891b4f46 100644
 --- a/src/main/java/net/minecraft/server/ChunkProviderServer.java
 +++ b/src/main/java/net/minecraft/server/ChunkProviderServer.java
 @@ -27,14 +27,28 @@ import it.unimi.dsi.fastutil.objects.Object2BooleanLinkedOpenHashMap;
@@ -259,8 +261,89 @@ index 83e3dcbbe36ce1f947f387ec55067e51a1b7384a..d846fa2fb41f64115dd6f6d4f2468f47
      private final LightEngineThreaded lightEngine;
      public final ChunkProviderServer.a serverThreadQueue; // Paper private -> public
      public final PlayerChunkMap playerChunkMap;
+@@ -143,7 +157,7 @@ public class ChunkProviderServer extends IChunkProvider {
+     long chunkFutureAwaitCounter; // Tuinity - private -> package private
+ 
+     public void getEntityTickingChunkAsync(int x, int z, java.util.function.Consumer<Chunk> onLoad) {
+-        if (Thread.currentThread() != this.serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             this.serverThreadQueue.execute(() -> {
+                 ChunkProviderServer.this.getEntityTickingChunkAsync(x, z, onLoad);
+             });
+@@ -153,7 +167,7 @@ public class ChunkProviderServer extends IChunkProvider {
+     }
+ 
+     public void getTickingChunkAsync(int x, int z, java.util.function.Consumer<Chunk> onLoad) {
+-        if (Thread.currentThread() != this.serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             this.serverThreadQueue.execute(() -> {
+                 ChunkProviderServer.this.getTickingChunkAsync(x, z, onLoad);
+             });
+@@ -163,7 +177,7 @@ public class ChunkProviderServer extends IChunkProvider {
+     }
+ 
+     public void getFullChunkAsync(int x, int z, java.util.function.Consumer<Chunk> onLoad) {
+-        if (Thread.currentThread() != this.serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             this.serverThreadQueue.execute(() -> {
+                 ChunkProviderServer.this.getFullChunkAsync(x, z, onLoad);
+             });
+@@ -173,7 +187,7 @@ public class ChunkProviderServer extends IChunkProvider {
+     }
+ 
+     private void getChunkFutureAsynchronously(int x, int z, int ticketLevel, Function<PlayerChunk, CompletableFuture<Either<Chunk, PlayerChunk.Failure>>> futureGet, java.util.function.Consumer<Chunk> onLoad) {
+-        if (Thread.currentThread() != this.serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             throw new IllegalStateException();
+         }
+         ChunkCoordIntPair chunkPos = new ChunkCoordIntPair(x, z);
+@@ -272,7 +286,7 @@ public class ChunkProviderServer extends IChunkProvider {
+     void getChunkAtAsynchronously(int chunkX, int chunkZ, int ticketLevel,
+                                   java.util.function.Function<PlayerChunk, CompletableFuture<Either<IChunkAccess, PlayerChunk.Failure>>> function,
+                                   java.util.function.Consumer<IChunkAccess> consumer) {
+-        if (Thread.currentThread() != this.serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             throw new IllegalStateException();
+         }
+         ChunkCoordIntPair chunkPos = new ChunkCoordIntPair(chunkX, chunkZ);
+@@ -466,7 +480,7 @@ public class ChunkProviderServer extends IChunkProvider {
+         /*
+         long k = ChunkCoordIntPair.pair(x, z);
+ 
+-        if (Thread.currentThread() == this.serverThread) {
++        if (me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             return this.getChunkAtIfLoadedMainThread(x, z);
+         }
+ 
+@@ -509,7 +523,7 @@ public class ChunkProviderServer extends IChunkProvider {
+     private long asyncLoadSeqCounter;
+ 
+     public CompletableFuture<Either<IChunkAccess, PlayerChunk.Failure>> getChunkAtAsynchronously(int x, int z, boolean gen, boolean isUrgent) {
+-        if (Thread.currentThread() != this.serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             CompletableFuture<Either<IChunkAccess, PlayerChunk.Failure>> future = new CompletableFuture<Either<IChunkAccess, PlayerChunk.Failure>>();
+             this.serverThreadQueue.execute(() -> {
+                 this.getChunkAtAsynchronously(x, z, gen, isUrgent).whenComplete((chunk, ex) -> {
+@@ -667,7 +681,7 @@ public class ChunkProviderServer extends IChunkProvider {
+             return ifLoaded;
+         }
+         // AirplaneL end
+-        if (Thread.currentThread() != this.serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             return (IChunkAccess) CompletableFuture.supplyAsync(() -> {
+                 return this.getChunkAt(i, j, chunkstatus, flag);
+             }, this.serverThreadQueue).join();
+@@ -738,7 +752,7 @@ public class ChunkProviderServer extends IChunkProvider {
+     @Override
+     public Chunk a(int i, int j) {
+         // AirplaneL start
+-//        if (Thread.currentThread() != this.serverThread) {
++//        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+ //            return null;
+ //        } else {
+             return this.getChunkAtIfLoadedMainThread(i, j); // Paper - optimise for loaded chunks
 diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
-index 68471de8f7e8ee10ac1f85e919aee4db4c6ba008..cf1106f5ff611a9e25dedaf81f7e14f5680afd49 100644
+index 68471de8f7e8ee10ac1f85e919aee4db4c6ba008..b7a98b228f08f09868a5be1923fcb139eb7bb2b1 100644
 --- a/src/main/java/net/minecraft/server/MinecraftServer.java
 +++ b/src/main/java/net/minecraft/server/MinecraftServer.java
 @@ -66,8 +66,20 @@ import co.aikar.timings.MinecraftTimings; // Paper
@@ -568,8 +651,17 @@ index 68471de8f7e8ee10ac1f85e919aee4db4c6ba008..cf1106f5ff611a9e25dedaf81f7e14f5
  
      public String getVersion() {
          return SharedConstants.getGameVersion().getName();
+@@ -1898,7 +1969,7 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+             this.saveData.a(a(this.resourcePackRepository));
+             datapackresources.i();
+             new ServerResourcesReloadedEvent(cause).callEvent(); // Paper
+-            if (Thread.currentThread() != this.serverThread) return; // Paper
++            if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) return; // Paper
+             //this.getPlayerList().savePlayers(); // Paper - we don't need to do this
+             this.getPlayerList().reload();
+             this.customFunctionData.a(this.dataPackResources.a());
 diff --git a/src/main/java/net/minecraft/server/World.java b/src/main/java/net/minecraft/server/World.java
-index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..9f86b2462494847ad95e7bb4224f58b106b8d237 100644
+index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..542f87cc1cfd66310c718d28fe4916552d71fd4c 100644
 --- a/src/main/java/net/minecraft/server/World.java
 +++ b/src/main/java/net/minecraft/server/World.java
 @@ -32,8 +32,22 @@ import org.bukkit.craftbukkit.block.CraftBlockState;
@@ -596,3 +688,71 @@ index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..9f86b2462494847ad95e7bb4224f58b1
  
      protected static final Logger LOGGER = LogManager.getLogger();
      public static final Codec<ResourceKey<World>> f = MinecraftKey.a.xmap(ResourceKey.b(IRegistry.L), ResourceKey::a);
+@@ -1112,7 +1126,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
+         // CraftBukkit end
+         if (isOutsideWorld(blockposition)) {
+             return null;
+-        } else if (!this.isClientSide && Thread.currentThread() != this.serverThread) {
++        } else if (!this.isClientSide && !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             return null;
+         } else {
+             // CraftBukkit start
+diff --git a/src/main/java/net/minecraft/server/WorldServer.java b/src/main/java/net/minecraft/server/WorldServer.java
+index 0e2bbf292be2bd20b01ec6e630ea3d8a8e8d3cc8..6322f50b97f4318556a222ffca1fcb97f6d4d320 100644
+--- a/src/main/java/net/minecraft/server/WorldServer.java
++++ b/src/main/java/net/minecraft/server/WorldServer.java
+@@ -241,7 +241,7 @@ public class WorldServer extends World implements GeneratorAccessSeed {
+ 
+     public final void loadChunksForMoveAsync(AxisAlignedBB axisalignedbb, int toX, int toZ, // Yatopia
+                                              java.util.function.Consumer<List<IChunkAccess>> onLoad) {
+-        if (Thread.currentThread() != this.serverThread) {
++        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             this.getChunkProvider().serverThreadQueue.execute(() -> {
+                 this.loadChunksForMoveAsync(axisalignedbb, toX, toZ, onLoad);
+             });
+@@ -634,7 +634,7 @@ public class WorldServer extends World implements GeneratorAccessSeed {
+     @Override
+     protected TileEntity getTileEntity(BlockPosition pos, boolean validate) {
+         TileEntity result = super.getTileEntity(pos, validate);
+-        if (!validate || Thread.currentThread() != this.serverThread) {
++        if (!validate || !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
+             // SPIGOT-5378: avoid deadlock, this can be called in loading logic (i.e lighting) but getType() will block on chunk load
+             return result;
+         }
+diff --git a/src/main/java/org/spigotmc/AsyncCatcher.java b/src/main/java/org/spigotmc/AsyncCatcher.java
+index 51e9c54cddf4b28ba3d3d892322c487774bdab70..d4673792aba012a928a038376e7da243acf559e7 100644
+--- a/src/main/java/org/spigotmc/AsyncCatcher.java
++++ b/src/main/java/org/spigotmc/AsyncCatcher.java
+@@ -5,12 +5,12 @@ import net.minecraft.server.MinecraftServer;
+ public class AsyncCatcher
+ {
+ 
+-    public static boolean enabled = true;
++    public static boolean enabled = false; // Titanium - async world ticking
+     public static boolean shuttingDown = false; // Paper
+ 
+     public static void catchOp(String reason)
+     {
+-        if ( ( enabled || com.tuinity.tuinity.util.TickThread.STRICT_THREAD_CHECKS ) && !org.bukkit.Bukkit.isPrimaryThread() ) // Tuinity
++        if ( ( enabled || com.tuinity.tuinity.util.TickThread.STRICT_THREAD_CHECKS ) && !org.bukkit.Bukkit.isPrimaryThread() && !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) // Tuinity // Titanium - async world ticking
+         {
+             MinecraftServer.LOGGER.fatal("Thread " + Thread.currentThread().getName() + " failed thread check for reason: Asynchronous " + reason, new Throwable()); // Tuinity - not all exceptions are printed
+             throw new IllegalStateException( "Asynchronous " + reason + "!" );
+diff --git a/src/main/java/org/spigotmc/TicksPerSecondCommand.java b/src/main/java/org/spigotmc/TicksPerSecondCommand.java
+index 3c7b9a6d24e064f9c1ec5fb6d52f42627944d7fa..fe8636519166afbd98e033b1dee50eca8feb868d 100644
+--- a/src/main/java/org/spigotmc/TicksPerSecondCommand.java
++++ b/src/main/java/org/spigotmc/TicksPerSecondCommand.java
+@@ -34,6 +34,13 @@ public class TicksPerSecondCommand extends Command
+             tpsAvg[i] = format( tps[i] );
+         }
+         sender.sendMessage(ChatColor.GOLD + "TPS from last 5s, 1m, 5m, 15m: " + org.apache.commons.lang.StringUtils.join(tpsAvg, ", ")); // Purpur
++        // Titanium start - add async ticking /tps messages
++        sender.sendMessage( ChatColor.GOLD + "Async world ticking: " + me.titaniumtown.TitaniumConfig.dimThreading);
++        if (me.titaniumtown.TitaniumConfig.dimThreading) {
++            sender.sendMessage( ChatColor.GOLD + "Threads being used for async world ticking " + me.titaniumtown.TitaniumConfig.dimThreadingThreads);
++            // sender.sendMessage( ChatColor.GOLD + "The worlds where ticking for " + net.minecraft.server.MinecraftServer.worldTick + "ms"); // TODO
++        }
++        // Titanium end
+         if (args.length > 0 && args[0].equals("mem") && sender.hasPermission("bukkit.command.tpsmemory")) {
+             sender.sendMessage(ChatColor.GOLD + "Current Memory Usage: " + ChatColor.GREEN + ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024)) + "/" + (Runtime.getRuntime().totalMemory() / (1024 * 1024)) + " mb (Max: " + (Runtime.getRuntime().maxMemory() / (1024 * 1024)) + " mb)");
+             if (!hasShownMemoryWarning) {
