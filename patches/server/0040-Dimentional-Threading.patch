@@ -1,11 +1,27 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Simon Gardling <titaniumtown@gmail.com>
-Date: Mon, 4 Jan 2021 21:06:13 -0500
+Date: Tue, 5 Jan 2021 23:57:48 -0500
 Subject: [PATCH] Dimentional Threading
 
+This patch is based off of https://github.com/YatopiaMC/Yatopia/blob/archive/1.15.2/worldParallelTick/patches/server/0046-Option-for-async-world-ticking.patch and https://github.com/YatopiaMC/Yatopia/blob/archive/1.15.2/worldParallelTick/patches/server/0040-Add-MainThreadHandler-to-allow-custom-MainThreads.patch
+Aiming to tick worlds Asynchronously, meaning that world ticking won't just be done on 1 thread, so each dimention would use it's own thread, not just using 1 thread for ticking all 3 dimentions (or more).
 
+diff --git a/src/main/java/com/destroystokyo/paper/PaperConfig.java b/src/main/java/com/destroystokyo/paper/PaperConfig.java
+index ce14283dd1a1fddbea17c2fbaf1c4ef9d7a7479f..f6c1de8a0f915e6259672af74de1fce92a9e7bd8 100644
+--- a/src/main/java/com/destroystokyo/paper/PaperConfig.java
++++ b/src/main/java/com/destroystokyo/paper/PaperConfig.java
+@@ -206,7 +206,8 @@ public class PaperConfig {
+ 
+     public static String timingsServerName;
+     private static void timings() {
+-        boolean timings = getBoolean("timings.enabled", true);
++        // boolean timings = getBoolean("timings.enabled", true);
++        boolean timings = false; // Titanium
+         boolean verboseTimings = getBoolean("timings.verbose", true);
+         TimingsManager.privacy = getBoolean("timings.server-name-privacy", false);
+         TimingsManager.hiddenConfigs = getList("timings.hidden-config-entries", Lists.newArrayList("database", "settings.bungeecord-addresses", "settings.velocity-support.secret"));
 diff --git a/src/main/java/com/tuinity/tuinity/util/TickThread.java b/src/main/java/com/tuinity/tuinity/util/TickThread.java
-index 08ed243259f052165c6f75aed1d1d65a14219715..d2076df77817a5d0353a078d213053b04639992b 100644
+index 08ed243259f052165c6f75aed1d1d65a14219715..c747ce622ce6f27f3386701d6529e641e968d022 100644
 --- a/src/main/java/com/tuinity/tuinity/util/TickThread.java
 +++ b/src/main/java/com/tuinity/tuinity/util/TickThread.java
 @@ -22,7 +22,7 @@ public final class TickThread extends Thread {
@@ -13,350 +29,235 @@ index 08ed243259f052165c6f75aed1d1d65a14219715..d2076df77817a5d0353a078d213053b0
  
      public static void ensureTickThread(final String reason) {
 -        if (!Bukkit.isPrimaryThread()) {
-+        if (!(Bukkit.isPrimaryThread() || me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread()))) {
++        if (!Bukkit.isPrimaryThread() || !me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              MinecraftServer.LOGGER.fatal("Thread " + Thread.currentThread().getName() + " failed main thread check: " + reason, new Throwable());
              throw new IllegalStateException(reason);
          }
-diff --git a/src/main/java/me/titaniumtown/DimThread/DimThread.java b/src/main/java/me/titaniumtown/DimThread/DimThread.java
+diff --git a/src/main/java/me/titaniumtown/MainThreadHandler.java b/src/main/java/me/titaniumtown/MainThreadHandler.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..6b1e1ca4e8202e44edd00d4b6ff7005d7eb3f282
+index 0000000000000000000000000000000000000000..075762c7e1b7d510590160c6b31539437f00da34
 --- /dev/null
-+++ b/src/main/java/me/titaniumtown/DimThread/DimThread.java
-@@ -0,0 +1,53 @@
-+package me.titaniumtown.dimthread;
++++ b/src/main/java/me/titaniumtown/MainThreadHandler.java
+@@ -0,0 +1,17 @@
++package me.titaniumtown;
 +
-+import me.titaniumtown.dimthread.thread.IMutableMainThread;
-+import me.titaniumtown.dimthread.util.ServerManager;
-+import me.titaniumtown.threading.ThreadPool;
-+import net.minecraft.server.WorldServer;
-+import net.minecraft.server.MinecraftServer;
++import org.bukkit.craftbukkit.util.WeakCollection;
 +
-+public class DimThread {
-+    public static final String MOD_ID = "dimthread";
-+    public static final ServerManager MANAGER = new ServerManager();
++public class MainThreadHandler {
 +
-+    public static ThreadPool getThreadPool(MinecraftServer server) {
-+        return MANAGER.getThreadPool(server);
-+    }
++	private static WeakCollection<Thread> weakMainThreads = new WeakCollection<Thread>();
 +
-+    public static void swapThreadsAndRun(Runnable task, Object... threadedObjects) {
-+        Thread currentThread = Thread.currentThread();
-+        Thread[] oldThreads = new Thread[threadedObjects.length];
++	public static void registerThread(Thread thread) {
++		weakMainThreads.add(thread);
++	}
 +
-+        for(int i = 0; i < oldThreads.length; i++) {
-+            oldThreads[i] = ((IMutableMainThread)threadedObjects[i]).getMainThread();
-+            ((IMutableMainThread)threadedObjects[i]).setMainThread(currentThread);
++	public static boolean isMainThread(Thread thread) {
++		return weakMainThreads.contains(thread);
++	}
++
++}
+\ No newline at end of file
+diff --git a/src/main/java/net/minecraft/server/ChunkMapDistance.java b/src/main/java/net/minecraft/server/ChunkMapDistance.java
+index b4133720127163157058f73c2e3270f055ca87e4..46cfbbe5aef3b81d2e131c38eb8276e6d682eb83 100644
+--- a/src/main/java/net/minecraft/server/ChunkMapDistance.java
++++ b/src/main/java/net/minecraft/server/ChunkMapDistance.java
+@@ -108,6 +108,7 @@ public abstract class ChunkMapDistance {
+     protected void purgeTickets() {
+         com.tuinity.tuinity.util.TickThread.softEnsureTickThread("Async purge tickets"); // Tuinity
+         ++this.currentTick;
++        synchronized (tickets) {
+         ObjectIterator objectiterator = this.tickets.long2ObjectEntrySet().fastIterator();
+ 
+         // Tuinity start - delay chunk unloads
+@@ -147,7 +148,7 @@ public abstract class ChunkMapDistance {
+             tempLevel[0] = PlayerChunkMap.GOLDEN_TICKET + 1; // Tuinity - reset
+         }
+ 
+-    }
++    }}
+ 
+     private static int getLowestTicketLevel(ArraySetSorted<Ticket<?>> arraysetsorted) {
+         AsyncCatcher.catchOp("ChunkMapDistance::getLowestTicketLevel"); // Paper
+@@ -272,7 +273,9 @@ public abstract class ChunkMapDistance {
+         }
+ 
+         if (arraysetsorted.isEmpty()) {
+-            this.tickets.remove(i);
++        	synchronized (tickets) {
++        		this.tickets.remove(i);
++        	}
+         }
+ 
+         int newLevel = getLowestTicketLevel(arraysetsorted); // Paper
+@@ -443,9 +446,11 @@ public abstract class ChunkMapDistance {
+ 
+     private ArraySetSorted<Ticket<?>> e(long i) {
+         com.tuinity.tuinity.util.TickThread.softEnsureTickThread("Async tickets compute"); // Tuinity
++        synchronized (tickets) {
+         return (ArraySetSorted) this.tickets.computeIfAbsent(i, (j) -> {
+             return ArraySetSorted.a(4);
+         });
 +        }
-+
-+        task.run();
-+
-+        for(int i = 0; i < oldThreads.length; i++) {
-+            ((IMutableMainThread)threadedObjects[i]).setMainThread(oldThreads[i]);
-+        }
-+    }
-+
-+    /**
-+        * Makes it easy to understand what is happening in crash reports and helps identify dimthread workers.
-+        * */
-+    public static void attach(Thread thread, String name) {
-+        thread.setName(MOD_ID + "_" + name);
-+    }
-+
-+    public static void attach(Thread thread, WorldServer world) {
-+        // attach(thread, world.getRegistryKey().getValue().getPath());
-+        thread.setName(MOD_ID);
-+    }
-+
-+    /**
-+        * Checks if the given thread is a dimthread worker by checking the name. Probably quite fragile...
-+        * */
-+    // `Thread.currentThread() == this.serverThread` is the same as `me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())`
-+    // `Thread.currentThread() != this.serverThread` is the same as `!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())`
-+    public static boolean owns(Thread thread) {
-+        return thread.getName().startsWith(MOD_ID);
-+    }
-+}
-\ No newline at end of file
-diff --git a/src/main/java/me/titaniumtown/DimThread/thread/IMutableMainThread.java b/src/main/java/me/titaniumtown/DimThread/thread/IMutableMainThread.java
-new file mode 100644
-index 0000000000000000000000000000000000000000..475597240a1c091e6a1ff6be0682ff996ea91da1
---- /dev/null
-+++ b/src/main/java/me/titaniumtown/DimThread/thread/IMutableMainThread.java
-@@ -0,0 +1,6 @@
-+package me.titaniumtown.dimthread.thread;
-+
-+public interface IMutableMainThread {
-+	Thread getMainThread();
-+	void setMainThread(Thread thread);
-+}
-\ No newline at end of file
-diff --git a/src/main/java/me/titaniumtown/DimThread/util/ServerManager.java b/src/main/java/me/titaniumtown/DimThread/util/ServerManager.java
-new file mode 100644
-index 0000000000000000000000000000000000000000..7871ea9f536b4ab907ff64493905aa7467706f6f
---- /dev/null
-+++ b/src/main/java/me/titaniumtown/DimThread/util/ServerManager.java
-@@ -0,0 +1,39 @@
-+package me.titaniumtown.dimthread.util;
-+
-+import net.minecraft.server.MinecraftServer;
-+import me.titaniumtown.threading.ThreadPool;
-+
-+import java.util.Collections;
-+import java.util.ConcurrentModificationException;
-+import java.util.Map;
-+import java.util.WeakHashMap;
-+
-+public class ServerManager {
-+
-+	private final Map<MinecraftServer, Boolean> actives = Collections.synchronizedMap(new WeakHashMap<>());
-+	private final Map<MinecraftServer, ThreadPool> threadPools = Collections.synchronizedMap(new WeakHashMap<>());
-+
-+	public boolean isActive(MinecraftServer server) {
-+		return me.titaniumtown.TitaniumConfig.dimThreading;
-+	}
-+
-+	public void setActive(MinecraftServer server) {
-+		this.actives.put(server, me.titaniumtown.TitaniumConfig.dimThreading);
-+	}
-+
-+	public ThreadPool getThreadPool(MinecraftServer server) {
-+		return this.threadPools.computeIfAbsent(server, s -> new ThreadPool(me.titaniumtown.TitaniumConfig.dimThreadingThreads));
-+	}
-+
-+	public void setThreadCount(MinecraftServer server) {
-+		ThreadPool current = this.threadPools.get(server);
-+
-+		// if(current.getActiveCount() != 0) {
-+		// 	throw new ConcurrentModificationException("Setting the thread count in wrong phase");
-+		// }
-+
-+		this.threadPools.put(server, new ThreadPool(me.titaniumtown.TitaniumConfig.dimThreadingThreads));
-+		current.shutdown();
-+	}
-+
-+}
-\ No newline at end of file
-diff --git a/src/main/java/me/titaniumtown/TitaniumConfig.java b/src/main/java/me/titaniumtown/TitaniumConfig.java
-index 4737daae4b0acd65dbbc5e56134885c50ce36e64..e42dccedd0961ae9672f615e4e07f43b9925c9f7 100644
---- a/src/main/java/me/titaniumtown/TitaniumConfig.java
-+++ b/src/main/java/me/titaniumtown/TitaniumConfig.java
-@@ -156,10 +156,14 @@ public class TitaniumConfig {
-     public static boolean allowSandDupe = false;
-     public static boolean worldBorderChecks = true;
-     public static boolean allowAllDupes = false;
-+    public static int dimThreadingThreads = 4;
-+    public static boolean dimThreading = false;
-     private static void experimental() {
-         allowSandDupe = getBoolean("settings.experimental.allow-sand-dupe", allowSandDupe);
-         worldBorderChecks = getBoolean("settings.experimental.world-border-checks", worldBorderChecks);
-         allowAllDupes = getBoolean("settings.experimental.allow-all-dupes", allowAllDupes);
-+        dimThreadingThreads = getInt("settings.experimental.dimentional-threads", dimThreadingThreads);
-+        dimThreading = getBoolean("settings.experimental.dimentional-threading", dimThreading); 
      }
  
-     public static boolean logPlayerLoginLoc = false;
-@@ -182,5 +186,6 @@ public class TitaniumConfig {
-     public static double replace1 = ((double)biggestInt)-112.0D; // replacement for 2.9999872E7D
-     public static double replace2 = WborderSize/2; // replacement for 3.0E7D
-     public static int replace3 = biggestInt + 16; // replacement for 30000000
+     protected void a(ChunkCoordIntPair chunkcoordintpair, boolean flag) {
+@@ -485,16 +490,16 @@ public abstract class ChunkMapDistance {
+     }
+ 
+     protected String c(long i) {
+-        ArraySetSorted<Ticket<?>> arraysetsorted = (ArraySetSorted) this.tickets.get(i);
+-        String s;
 -
-+    
-+    public static boolean DEBUG = true; // Used for DIM-threading debugging
- }
-diff --git a/src/main/java/me/titaniumtown/threading/ThreadPool.java b/src/main/java/me/titaniumtown/threading/ThreadPool.java
-new file mode 100644
-index 0000000000000000000000000000000000000000..ba0e02a4cb5db227741c6ad5a4697587d3863f9b
---- /dev/null
-+++ b/src/main/java/me/titaniumtown/threading/ThreadPool.java
-@@ -0,0 +1,70 @@
-+package me.titaniumtown.threading;
-+
-+import java.util.Iterator;
-+import java.util.concurrent.Executors;
-+import java.util.concurrent.ThreadPoolExecutor;
-+import java.util.concurrent.atomic.AtomicInteger;
-+import java.util.function.Consumer;
-+
-+public class ThreadPool {
-+
-+    private ThreadPoolExecutor executor;
-+    private final int threadCount;
-+
-+    private final AtomicInteger activeCount = new AtomicInteger();
-+
-+    public ThreadPool(int threadCount) {
-+        this.threadCount = threadCount;
-+        this.restart();
-+    }
-+
-+    public int getThreadCount() {
-+        return this.threadCount;
-+    }
-+
-+    public ThreadPoolExecutor getExecutor() {
-+        return this.executor;
-+    }
-+
-+    public void run(Runnable action) {
-+        this.activeCount.getAndIncrement();
-+
-+        this.executor.execute(() -> {
-+            action.run();
-+            activeCount.getAndDecrement();
-+        });
-+    }
-+
-+    public <T> void iterate(Iterable<T> iterable, Consumer<T> action) {
-+        iterable.forEach(t -> this.run(() -> action.accept(t)));
-+    }
-+
-+    public <T> void iterate(Iterator<T> iterator, Consumer<T> action) {
-+        iterator.forEachRemaining(t -> this.run(() -> action.accept(t)));
-+    }
-+
-+    public void awaitFreeThread() {
-+        while(this.activeCount.get() >= this.getThreadCount()) {
-+            try {Thread.sleep(5);}
-+            catch(InterruptedException ignored) {}
+-        if (arraysetsorted != null && !arraysetsorted.isEmpty()) {
+-            s = ((Ticket) arraysetsorted.b()).toString();
+-        } else {
+-            s = "no_ticket";
+-        }
+-
+-        return s;
++    	synchronized (tickets) {
++    		ArraySetSorted<Ticket<?>> arraysetsorted = (ArraySetSorted) this.tickets.get(i);
++            String s;
++            if (arraysetsorted != null && !arraysetsorted.isEmpty()) {
++                s = ((Ticket) arraysetsorted.b()).toString();
++            } else {
++                s = "no_ticket";
++            }
++            return s;
++		}
+     }
+ 
+     protected void setNoTickViewDistance(int i) { // Paper - force abi breakage on usage change
+@@ -524,6 +529,7 @@ public abstract class ChunkMapDistance {
+         com.tuinity.tuinity.util.TickThread.softEnsureTickThread("Async ticket remove"); // Tuinity
+         Ticket<T> target = new Ticket<>(ticketType, ticketLevel, ticketIdentifier);
+ 
++        synchronized (tickets) {
+         for (java.util.Iterator<Entry<ArraySetSorted<Ticket<?>>>> iterator = this.tickets.long2ObjectEntrySet().fastIterator(); iterator.hasNext();) {
+             Entry<ArraySetSorted<Ticket<?>>> entry = iterator.next();
+             ArraySetSorted<Ticket<?>> tickets = entry.getValue();
+@@ -537,6 +543,7 @@ public abstract class ChunkMapDistance {
+                 }
+             }
+         }
 +        }
-+    }
-+
-+    public void awaitCompletion() {
-+        while(this.activeCount.get() != 0) {
-+            try {Thread.sleep(5);}
-+            catch(InterruptedException ignored) {}
-+        }
-+    }
-+
-+    public void restart() {
-+        if(this.executor == null || this.executor.isShutdown()) {
-+            this.executor = (ThreadPoolExecutor)Executors.newFixedThreadPool(this.threadCount);
-+        }
-+    }
-+
-+    public void shutdown() {
-+        this.executor.shutdown();
-+    }
-+
-+}
+     }
+     // CraftBukkit end
+ 
+@@ -548,9 +555,11 @@ public abstract class ChunkMapDistance {
+ 
+         @Override
+         protected int b(long i) {
+-            ArraySetSorted<Ticket<?>> arraysetsorted = (ArraySetSorted) ChunkMapDistance.this.tickets.get(i);
++            synchronized (tickets) {
++                ArraySetSorted<Ticket<?>> arraysetsorted = (ArraySetSorted) ChunkMapDistance.this.tickets.get(i);
+ 
+-            return arraysetsorted == null ? Integer.MAX_VALUE : (arraysetsorted.isEmpty() ? Integer.MAX_VALUE : ((Ticket) arraysetsorted.b()).b());
++                return arraysetsorted == null ? Integer.MAX_VALUE : (arraysetsorted.isEmpty() ? Integer.MAX_VALUE : ((Ticket) arraysetsorted.b()).b());
++            }
+         }
+ 
+         @Override
 diff --git a/src/main/java/net/minecraft/server/ChunkProviderServer.java b/src/main/java/net/minecraft/server/ChunkProviderServer.java
-index 83e3dcbbe36ce1f947f387ec55067e51a1b7384a..8f9ccb3cf09feecfaa1d01f7e1641d98891b4f46 100644
+index 83e3dcbbe36ce1f947f387ec55067e51a1b7384a..0078bb84011fd319daf660c1acee490bfaf8631c 100644
 --- a/src/main/java/net/minecraft/server/ChunkProviderServer.java
 +++ b/src/main/java/net/minecraft/server/ChunkProviderServer.java
-@@ -27,14 +27,28 @@ import it.unimi.dsi.fastutil.objects.Object2BooleanLinkedOpenHashMap;
- import it.unimi.dsi.fastutil.objects.ObjectBidirectionalIterator;
- import it.unimi.dsi.fastutil.objects.Object2BooleanMap;
- // Tuinity end
-+import me.titaniumtown.dimthread.thread.IMutableMainThread;
- 
--public class ChunkProviderServer extends IChunkProvider {
-+// Titanium start - DIM-threading work
-+public class ChunkProviderServer extends IChunkProvider implements IMutableMainThread {
-+    private Thread serverThread;
-+
-+	@Override
-+	public Thread getMainThread() {
-+		return this.serverThread;
-+	}
-+
-+	@Override
-+	public void setMainThread(Thread thread) {
-+		this.serverThread = thread;
-+	}
-+    // Titanium end
- 
-     private static final List<ChunkStatus> b = ChunkStatus.a(); static final List<ChunkStatus> getPossibleChunkStatuses() { return ChunkProviderServer.b; } // Paper - OBFHELPER
-     private final ChunkMapDistance chunkMapDistance;
-     public final ChunkGenerator chunkGenerator;
-     private final WorldServer world;
--    public final Thread serverThread; // Paper - private -> public
-+    // public final Thread serverThread; // Paper - private -> public // Titanium
-     private final LightEngineThreaded lightEngine;
-     public final ChunkProviderServer.a serverThreadQueue; // Paper private -> public
-     public final PlayerChunkMap playerChunkMap;
-@@ -143,7 +157,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -143,7 +143,7 @@ public class ChunkProviderServer extends IChunkProvider {
      long chunkFutureAwaitCounter; // Tuinity - private -> package private
  
      public void getEntityTickingChunkAsync(int x, int z, java.util.function.Consumer<Chunk> onLoad) {
 -        if (Thread.currentThread() != this.serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              this.serverThreadQueue.execute(() -> {
                  ChunkProviderServer.this.getEntityTickingChunkAsync(x, z, onLoad);
              });
-@@ -153,7 +167,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -153,7 +153,7 @@ public class ChunkProviderServer extends IChunkProvider {
      }
  
      public void getTickingChunkAsync(int x, int z, java.util.function.Consumer<Chunk> onLoad) {
 -        if (Thread.currentThread() != this.serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              this.serverThreadQueue.execute(() -> {
                  ChunkProviderServer.this.getTickingChunkAsync(x, z, onLoad);
              });
-@@ -163,7 +177,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -163,7 +163,7 @@ public class ChunkProviderServer extends IChunkProvider {
      }
  
      public void getFullChunkAsync(int x, int z, java.util.function.Consumer<Chunk> onLoad) {
 -        if (Thread.currentThread() != this.serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              this.serverThreadQueue.execute(() -> {
                  ChunkProviderServer.this.getFullChunkAsync(x, z, onLoad);
              });
-@@ -173,7 +187,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -173,7 +173,7 @@ public class ChunkProviderServer extends IChunkProvider {
      }
  
      private void getChunkFutureAsynchronously(int x, int z, int ticketLevel, Function<PlayerChunk, CompletableFuture<Either<Chunk, PlayerChunk.Failure>>> futureGet, java.util.function.Consumer<Chunk> onLoad) {
 -        if (Thread.currentThread() != this.serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              throw new IllegalStateException();
          }
          ChunkCoordIntPair chunkPos = new ChunkCoordIntPair(x, z);
-@@ -272,7 +286,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -272,7 +272,7 @@ public class ChunkProviderServer extends IChunkProvider {
      void getChunkAtAsynchronously(int chunkX, int chunkZ, int ticketLevel,
                                    java.util.function.Function<PlayerChunk, CompletableFuture<Either<IChunkAccess, PlayerChunk.Failure>>> function,
                                    java.util.function.Consumer<IChunkAccess> consumer) {
 -        if (Thread.currentThread() != this.serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              throw new IllegalStateException();
          }
          ChunkCoordIntPair chunkPos = new ChunkCoordIntPair(chunkX, chunkZ);
-@@ -466,7 +480,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -466,7 +466,7 @@ public class ChunkProviderServer extends IChunkProvider {
          /*
          long k = ChunkCoordIntPair.pair(x, z);
  
 -        if (Thread.currentThread() == this.serverThread) {
-+        if (me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              return this.getChunkAtIfLoadedMainThread(x, z);
          }
  
-@@ -509,7 +523,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -509,7 +509,7 @@ public class ChunkProviderServer extends IChunkProvider {
      private long asyncLoadSeqCounter;
  
      public CompletableFuture<Either<IChunkAccess, PlayerChunk.Failure>> getChunkAtAsynchronously(int x, int z, boolean gen, boolean isUrgent) {
 -        if (Thread.currentThread() != this.serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              CompletableFuture<Either<IChunkAccess, PlayerChunk.Failure>> future = new CompletableFuture<Either<IChunkAccess, PlayerChunk.Failure>>();
              this.serverThreadQueue.execute(() -> {
                  this.getChunkAtAsynchronously(x, z, gen, isUrgent).whenComplete((chunk, ex) -> {
-@@ -667,7 +681,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -667,7 +667,7 @@ public class ChunkProviderServer extends IChunkProvider {
              return ifLoaded;
          }
          // AirplaneL end
 -        if (Thread.currentThread() != this.serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              return (IChunkAccess) CompletableFuture.supplyAsync(() -> {
                  return this.getChunkAt(i, j, chunkstatus, flag);
              }, this.serverThreadQueue).join();
-@@ -738,7 +752,7 @@ public class ChunkProviderServer extends IChunkProvider {
+@@ -738,7 +738,7 @@ public class ChunkProviderServer extends IChunkProvider {
      @Override
      public Chunk a(int i, int j) {
          // AirplaneL start
 -//        if (Thread.currentThread() != this.serverThread) {
-+//        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++//        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
  //            return null;
  //        } else {
              return this.getChunkAtIfLoadedMainThread(i, j); // Paper - optimise for loaded chunks
+diff --git a/src/main/java/net/minecraft/server/EntityTrackerEntry.java b/src/main/java/net/minecraft/server/EntityTrackerEntry.java
+index ad06bd81eded5d60f16c2d0ad1a4390f4b5a11a5..3d7127f03a5ae69386431f64015232eed99de5dd 100644
+--- a/src/main/java/net/minecraft/server/EntityTrackerEntry.java
++++ b/src/main/java/net/minecraft/server/EntityTrackerEntry.java
+@@ -89,7 +89,7 @@ public class EntityTrackerEntry {
+ 
+             if (this.tickCounter % 10 == 0 && itemstack.getItem() instanceof ItemWorldMap) { // CraftBukkit - Moved this.tickCounter % 10 logic here so item frames do not enter the other blocks
+                 WorldMap worldmap = ItemWorldMap.getSavedMap(itemstack, this.b);
+-                Iterator iterator = this.trackedPlayers.iterator(); // CraftBukkit
++                Iterator iterator = new HashSet<>(this.trackedPlayers).iterator(); // CraftBukkit
+ 
+                 while (iterator.hasNext()) {
+                     EntityPlayer entityplayer = (EntityPlayer) iterator.next();
 diff --git a/src/main/java/net/minecraft/server/IAsyncTaskHandler.java b/src/main/java/net/minecraft/server/IAsyncTaskHandler.java
-index 27db247aa40e0516302c74b9bf00c631a8607af5..4537e6ec20a08ae57e2d71a9851379351a81d33d 100644
+index 27db247aa40e0516302c74b9bf00c631a8607af5..cd38e69c91c1ecef52a70844c3ed0b517dbe5394 100644
 --- a/src/main/java/net/minecraft/server/IAsyncTaskHandler.java
 +++ b/src/main/java/net/minecraft/server/IAsyncTaskHandler.java
 @@ -25,7 +25,7 @@ public abstract class IAsyncTaskHandler<R extends Runnable> implements Mailbox<R
@@ -364,12 +265,12 @@ index 27db247aa40e0516302c74b9bf00c631a8607af5..4537e6ec20a08ae57e2d71a985137935
  
      public boolean isMainThread() {
 -        return Thread.currentThread() == this.getThread();
-+        return me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread());
++        return me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread());
      }
  
      protected abstract Thread getThread();
 diff --git a/src/main/java/net/minecraft/server/MCUtil.java b/src/main/java/net/minecraft/server/MCUtil.java
-index e79e773f2219f9a9ae076fcbc8108b792201b11a..271ec0f02c41b4dd01457b084aca1ef550931138 100644
+index e79e773f2219f9a9ae076fcbc8108b792201b11a..24481225be5d91f5b4c8fd6e50ec4ad618dc4978 100644
 --- a/src/main/java/net/minecraft/server/MCUtil.java
 +++ b/src/main/java/net/minecraft/server/MCUtil.java
 @@ -362,7 +362,7 @@ public final class MCUtil {
@@ -377,7 +278,7 @@ index e79e773f2219f9a9ae076fcbc8108b792201b11a..271ec0f02c41b4dd01457b084aca1ef5
       */
      public static void ensureMain(String reason, Runnable run) {
 -        if (AsyncCatcher.enabled && Thread.currentThread() != MinecraftServer.getServer().serverThread) {
-+        if (AsyncCatcher.enabled && !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (AsyncCatcher.enabled && !me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              if (reason != null) {
                  new IllegalStateException("Asynchronous " + reason + "!").printStackTrace();
              }
@@ -386,357 +287,234 @@ index e79e773f2219f9a9ae076fcbc8108b792201b11a..271ec0f02c41b4dd01457b084aca1ef5
       */
      public static <T> T ensureMain(String reason, Supplier<T> run) {
 -        if (AsyncCatcher.enabled && Thread.currentThread() != MinecraftServer.getServer().serverThread) {
-+        if (AsyncCatcher.enabled && !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (AsyncCatcher.enabled && !me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              if (reason != null) {
                  new IllegalStateException("Asynchronous " + reason + "! Blocking thread until it returns ").printStackTrace();
              }
 diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
-index 68471de8f7e8ee10ac1f85e919aee4db4c6ba008..b7a98b228f08f09868a5be1923fcb139eb7bb2b1 100644
+index 68471de8f7e8ee10ac1f85e919aee4db4c6ba008..d3803a57ad79bd8e04b3c509ca6912a4ede83f93 100644
 --- a/src/main/java/net/minecraft/server/MinecraftServer.java
 +++ b/src/main/java/net/minecraft/server/MinecraftServer.java
-@@ -66,8 +66,20 @@ import co.aikar.timings.MinecraftTimings; // Paper
- import io.papermc.paper.util.PaperJvmChecker; // Paper
+@@ -46,7 +46,14 @@ import java.util.Random;
+ import java.util.Set;
+ import java.util.UUID;
+ import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.ExecutionException;
+ import java.util.concurrent.Executor;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.ThreadFactory;
++import java.util.concurrent.ThreadPoolExecutor;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicInteger;
+ import java.util.concurrent.atomic.AtomicReference;
+ import java.util.function.BooleanSupplier;
+ import java.util.function.Function;
+@@ -67,6 +74,11 @@ import io.papermc.paper.util.PaperJvmChecker; // Paper
  import io.papermc.paper.event.server.ServerResourcesReloadedEvent; // Paper
  import org.spigotmc.SlackActivityAccountant; // Spigot
-+// Titanium start - imports for DIM-threading
-+import me.titaniumtown.dimthread.DimThread;
-+import me.titaniumtown.threading.ThreadPool;
-+// Titanium end
  
++import me.titaniumtown.MainThreadHandler;
++import org.spigotmc.WatchdogThread;
++import co.aikar.timings.Timings;
++import java.util.ArrayList;
++
  public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTask> implements IMojangStatistics, ICommandListener, AutoCloseable {
-+    // Titanium start - variables needed for DIM-threading 
-+    private ThreadPool pool = new ThreadPool(Runtime.getRuntime().availableProcessors());
-+    // public abstract Iterable<WorldServer> getWorlds();
-+    public Iterable<WorldServer> getWorlds() {
-+        return this.worldServer.values();
-+    }
-+    private static boolean DEBUG = me.titaniumtown.TitaniumConfig.DEBUG;
-+    // Titanium end - variables needed for DIM-threading 
  
      private static MinecraftServer SERVER; // Paper
-     public static final Logger LOGGER = LogManager.getLogger();
-@@ -1353,117 +1365,174 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+@@ -178,6 +190,7 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+         thread.setUncaughtExceptionHandler((thread1, throwable) -> {
+             MinecraftServer.LOGGER.error(throwable);
+         });
++        MainThreadHandler.registerThread(thread);
+         S s0 = function.apply(thread); // CraftBukkit - decompile error
+ 
+         atomicreference.set(s0);
+@@ -1352,6 +1365,27 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+         co.aikar.timings.TimingsManager.FULL_SERVER_TICK.stopTiming(); // Paper
      }
  
++    // Titanium start - Async worlds ticking start
++    public static final ThreadFactory threadFactory = new ThreadFactory() {
++
++        private final AtomicInteger id = new AtomicInteger(0);
++
++        @Override
++        public Thread newThread(Runnable r) {
++            Thread thread = new Thread(r);
++            thread.setName("ASYNC_WORLD_THREAD" + "_" + id.incrementAndGet());
++            MainThreadHandler.registerThread(thread);
++            return thread;
++        }
++    };
++    
++    public final ExecutorService worldPool = new ThreadPoolExecutor(3, 50, 60, TimeUnit.SECONDS,
++            new LinkedBlockingQueue<Runnable>(), MinecraftServer.threadFactory);
++    
++    public static long worldTick = 0;
++    public static boolean asyncWorlds = true;
++    // Titanium end - Async worlds ticking start
++
      protected void b(BooleanSupplier booleansupplier) {
--        // Tuinity - replace logic
--        MinecraftTimings.bukkitSchedulerTimer.startTiming(); // Spigot // Paper
--        this.server.getScheduler().mainThreadHeartbeat(this.ticks); // CraftBukkit
--        MinecraftTimings.bukkitSchedulerTimer.stopTiming(); // Spigot // Paper
--        // Tuinity - replace logic
--        this.methodProfiler.enter("commandFunctions");
--        MinecraftTimings.commandFunctionsTimer.startTiming(); // Spigot // Paper
--        this.getFunctionData().tick();
--        MinecraftTimings.commandFunctionsTimer.stopTiming(); // Spigot // Paper
--        // Tuinity - replace logic
--        this.methodProfiler.exitEnter("levels");
--        Iterator iterator = this.getWorlds().iterator();
-+        if (!me.titaniumtown.TitaniumConfig.dimThreading) {
-+            // Tuinity - replace logic
-+            MinecraftTimings.bukkitSchedulerTimer.startTiming(); // Spigot // Paper
-+            this.server.getScheduler().mainThreadHeartbeat(this.ticks); // CraftBukkit
-+            MinecraftTimings.bukkitSchedulerTimer.stopTiming(); // Spigot // Paper
-+            // Tuinity - replace logic
-+            this.methodProfiler.enter("commandFunctions");
-+            MinecraftTimings.commandFunctionsTimer.startTiming(); // Spigot // Paper
-+            this.getFunctionData().tick();
-+            MinecraftTimings.commandFunctionsTimer.stopTiming(); // Spigot // Paper
-+            // Tuinity - replace logic
-+            this.methodProfiler.exitEnter("levels");
-+            Iterator iterator = this.getWorlds().iterator();
- 
--        // CraftBukkit start
--        // Run tasks that are waiting on processing
--        MinecraftTimings.processQueueTimer.startTiming(); // Spigot
--        while (!processQueue.isEmpty()) {
--            processQueue.remove().run();
--        }
--        MinecraftTimings.processQueueTimer.stopTiming(); // Spigot
--        // Tuinity - replace logic
--        MinecraftTimings.timeUpdateTimer.startTiming(); // Spigot // Paper
--        // Send time updates to everyone, it will get the right time from the world the player is in.
--        // Paper start - optimize time updates
--        for (final WorldServer world : this.getWorlds()) {
--            final boolean doDaylight = world.getGameRules().getBoolean(GameRules.DO_DAYLIGHT_CYCLE);
--            final long dayTime = world.getDayTime();
--            long worldTime = world.getTime();
--            final PacketPlayOutUpdateTime worldPacket = new PacketPlayOutUpdateTime(worldTime, dayTime, doDaylight);
--            for (EntityHuman entityhuman : world.getPlayers()) {
--                if (!(entityhuman instanceof EntityPlayer) || (ticks + entityhuman.getId()) % 20 != 0) {
--                    continue;
-+            // CraftBukkit start
-+            // Run tasks that are waiting on processing
-+            MinecraftTimings.processQueueTimer.startTiming(); // Spigot
-+            while (!processQueue.isEmpty()) {
-+                processQueue.remove().run();
-+            }
-+            MinecraftTimings.processQueueTimer.stopTiming(); // Spigot
-+            // Tuinity - replace logic
-+            MinecraftTimings.timeUpdateTimer.startTiming(); // Spigot // Paper
-+            // Send time updates to everyone, it will get the right time from the world the player is in.
-+            // Paper start - optimize time updates
-+            for (final WorldServer world : this.getWorlds()) {
-+                final boolean doDaylight = world.getGameRules().getBoolean(GameRules.DO_DAYLIGHT_CYCLE);
-+                final long dayTime = world.getDayTime();
-+                long worldTime = world.getTime();
-+                final PacketPlayOutUpdateTime worldPacket = new PacketPlayOutUpdateTime(worldTime, dayTime, doDaylight);
-+                for (EntityHuman entityhuman : world.getPlayers()) {
-+                    if (!(entityhuman instanceof EntityPlayer) || (ticks + entityhuman.getId()) % 20 != 0) {
-+                        continue;
-+                    }
-+                    EntityPlayer entityplayer = (EntityPlayer) entityhuman;
-+                    long playerTime = entityplayer.getPlayerTime();
-+                    PacketPlayOutUpdateTime packet = (playerTime == dayTime) ? worldPacket :
-+                        new PacketPlayOutUpdateTime(worldTime, playerTime, doDaylight);
-+                    entityplayer.playerConnection.sendPacket(packet); // Add support for per player time
-                 }
--                EntityPlayer entityplayer = (EntityPlayer) entityhuman;
--                long playerTime = entityplayer.getPlayerTime();
--                PacketPlayOutUpdateTime packet = (playerTime == dayTime) ? worldPacket :
--                    new PacketPlayOutUpdateTime(worldTime, playerTime, doDaylight);
--                entityplayer.playerConnection.sendPacket(packet); // Add support for per player time
-             }
--        }
--        // Paper end
--        MinecraftTimings.timeUpdateTimer.stopTiming(); // Spigot // Paper
-+            // Paper end
-+            MinecraftTimings.timeUpdateTimer.stopTiming(); // Spigot // Paper
- 
--        while (iterator.hasNext()) {
--            WorldServer worldserver = (WorldServer) iterator.next();
--            worldserver.hasPhysicsEvent =  org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper
--            worldserver.hasEntityMoveEvent = net.pl3x.purpur.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Purpur
--            worldserver.hasRidableMoveEvent = net.pl3x.purpur.event.entity.RidableMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Purpur
--            TileEntityHopper.skipHopperEvents = worldserver.paperConfig.disableHopperMoveEvents || org.bukkit.event.inventory.InventoryMoveItemEvent.getHandlerList().getRegisteredListeners().length == 0; // Paper
-+            while (iterator.hasNext()) {
-+                WorldServer worldserver = (WorldServer) iterator.next();
-+                worldserver.hasPhysicsEvent =  org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper
-+                worldserver.hasEntityMoveEvent = net.pl3x.purpur.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Purpur
-+                worldserver.hasRidableMoveEvent = net.pl3x.purpur.event.entity.RidableMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Purpur
-+                TileEntityHopper.skipHopperEvents = worldserver.paperConfig.disableHopperMoveEvents || org.bukkit.event.inventory.InventoryMoveItemEvent.getHandlerList().getRegisteredListeners().length == 0; // Paper
-+
-+                this.methodProfiler.a(() -> {
-+                    return worldserver + " " + worldserver.getDimensionKey().a();
-+                });
-+                /* Drop global time updates
-+                if (this.ticks % 20 == 0) {
-+                    this.methodProfiler.enter("timeSync");
-+                    this.playerList.a((Packet) (new PacketPlayOutUpdateTime(worldserver.getTime(), worldserver.getDayTime(), worldserver.getGameRules().getBoolean(GameRules.DO_DAYLIGHT_CYCLE))), worldserver.getDimensionKey());
-+                    this.methodProfiler.exit();
-+                }
-+                // CraftBukkit end */
-+                this.methodProfiler.enter("tick");
-+
-+                try {
-+                    // Tuinity - replace logic
-+                    worldserver.timings.doTick.startTiming(); // Spigot
-+                    worldserver.doTick(booleansupplier);
-+                    worldserver.getChunkProvider().playerChunkMap.dataRegionManager.recalculateRegions(); // Tuinity
-+                    worldserver.timings.doTick.stopTiming(); // Spigot
-+                    // Tuinity - replace logic
-+                } catch (Throwable throwable) {
-+                    // Spigot Start
-+                    CrashReport crashreport;
-+                    try {
-+                        crashreport = CrashReport.a(throwable, "Exception ticking world");
-+                    } catch (Throwable t) {
-+                        if (throwable instanceof ThreadDeath) { throw (ThreadDeath)throwable; } // Paper
-+                        throw new RuntimeException("Error generating crash report", t);
-+                    }
-+                    // Spigot End
-+
-+                    worldserver.a(crashreport);
-+                    throw new ReportedException(crashreport);
-+                }
- 
--            this.methodProfiler.a(() -> {
--                return worldserver + " " + worldserver.getDimensionKey().a();
--            });
--            /* Drop global time updates
--            if (this.ticks % 20 == 0) {
--                this.methodProfiler.enter("timeSync");
--                this.playerList.a((Packet) (new PacketPlayOutUpdateTime(worldserver.getTime(), worldserver.getDayTime(), worldserver.getGameRules().getBoolean(GameRules.DO_DAYLIGHT_CYCLE))), worldserver.getDimensionKey());
-                 this.methodProfiler.exit();
-+                this.methodProfiler.exit();
-+                worldserver.explosionDensityCache.clear(); // Paper - Optimize explosions
-             }
--            // CraftBukkit end */
-+        } else {
-+            // Titanium end - comment out single-threaded dim code
- 
--            this.methodProfiler.enter("tick");
-+            // Titanium start - Real DIM-threading work
-+            // Tuinity - replace logic
-+            // MinecraftTimings.bukkitSchedulerTimer.startTiming(); // Spigot // Paper
-+            this.server.getScheduler().mainThreadHeartbeat(this.ticks); // CraftBukkit
-+            // MinecraftTimings.bukkitSchedulerTimer.stopTiming(); // Spigot // Paper
-+            // Tuinity - replace logic
-+            this.methodProfiler.enter("commandFunctions");
-+            // MinecraftTimings.commandFunctionsTimer.startTiming(); // Spigot // Paper
-+            this.getFunctionData().tick();
-+            // MinecraftTimings.commandFunctionsTimer.stopTiming(); // Spigot // Paper
-+            // Tuinity - replace logic
-+            this.methodProfiler.exitEnter("levels");
-+            // Iterator iterator = this.getWorlds().iterator();
-+
-+            if(DEBUG)System.out.format("==================================================\n");
-+
-+            AtomicReference<CrashReport> crashReport = new AtomicReference<>();
-+
-+            this.pool.iterate(this.getWorlds().iterator(), worldserver -> {
-+                DimThread.attach(Thread.currentThread(), worldserver);
-+                // String dimensionName = worldserver.getDimension().getSkyProperties().getPath(); // TODO - FIX
-+
-+                // if(DEBUG)System.out.format("[%d] Started %s\n", this.ticks, dimensionName);
-+
-+                if (this.ticks % 20 == 0) {
-+                    this.methodProfiler.enter("timeSync");
-+                    this.playerList.a((Packet) (new PacketPlayOutUpdateTime(worldserver.getTime(), worldserver.getDayTime(), worldserver.getGameRules().getBoolean(GameRules.DO_DAYLIGHT_CYCLE))), worldserver.getDimensionKey());
-+                    this.methodProfiler.exit();
-+                }
- 
--            try {
--                // Tuinity - replace logic
--                worldserver.timings.doTick.startTiming(); // Spigot
--                worldserver.doTick(booleansupplier);
--                worldserver.getChunkProvider().playerChunkMap.dataRegionManager.recalculateRegions(); // Tuinity
--                worldserver.timings.doTick.stopTiming(); // Spigot
--                // Tuinity - replace logic
--            } catch (Throwable throwable) {
--                // Spigot Start
--                CrashReport crashreport;
-                 try {
--                    crashreport = CrashReport.a(throwable, "Exception ticking world");
--                } catch (Throwable t) {
--                    if (throwable instanceof ThreadDeath) { throw (ThreadDeath)throwable; } // Paper
--                    throw new RuntimeException("Error generating crash report", t);
-+                    DimThread.swapThreadsAndRun(() -> worldserver.doTick(booleansupplier), worldserver, worldserver.getChunkProvider());
-+                } catch (Throwable throwable) {
-+                    // Spigot Start
-+                    CrashReport crashreport;
-+                    try {
-+                        crashreport = CrashReport.a(throwable, "Exception ticking world");
-+                    } catch (Throwable t) {
-+                        if (throwable instanceof ThreadDeath) { throw (ThreadDeath)throwable; } // Paper
-+                        throw new RuntimeException("Error generating crash report", t);
-+                    }
-+                    // Spigot End
-+                    worldserver.a(crashreport);
-+                    throw new ReportedException(crashreport);
-                 }
--                // Spigot End
- 
--                worldserver.a(crashreport);
--                throw new ReportedException(crashreport);
--            }
-+                this.methodProfiler.exit();
-+                this.methodProfiler.exit();
-+                worldserver.explosionDensityCache.clear(); // Paper - Optimize explosions
- 
--            this.methodProfiler.exit();
--            this.methodProfiler.exit();
--            worldserver.explosionDensityCache.clear(); // Paper - Optimize explosions
--        }
-+                // if(DEBUG)System.out.format("[%d] Finished %s\n", this.ticks, dimensionName);
-+            });
-+            if(DEBUG)System.out.format("Ticking completed!\n");
-+            this.methodProfiler.exitEnter("connection");
-+            // MinecraftTimings.connectionTimer.startTiming(); // Spigot
-+            this.getServerConnection().c();
-+            // MinecraftTimings.connectionTimer.stopTiming(); // Spigot
-+            this.methodProfiler.exitEnter("players");
-+            // MinecraftTimings.playerListTimer.startTiming(); // Spigot // Paper
-+            this.playerList.tick();
-+            // MinecraftTimings.playerListTimer.stopTiming(); // Spigot // Paper
-+            if (SharedConstants.d) {
-+                GameTestHarnessTicker.a.b();
-+            }
- 
--        this.methodProfiler.exitEnter("connection");
--        MinecraftTimings.connectionTimer.startTiming(); // Spigot
--        this.getServerConnection().c();
--        MinecraftTimings.connectionTimer.stopTiming(); // Spigot
--        this.methodProfiler.exitEnter("players");
--        MinecraftTimings.playerListTimer.startTiming(); // Spigot // Paper
--        this.playerList.tick();
--        MinecraftTimings.playerListTimer.stopTiming(); // Spigot // Paper
--        if (SharedConstants.d) {
--            GameTestHarnessTicker.a.b();
--        }
-+            this.methodProfiler.exitEnter("server gui refresh");
- 
--        this.methodProfiler.exitEnter("server gui refresh");
-+            // MinecraftTimings.tickablesTimer.startTiming(); // Spigot // Paper
-+            for (int i = 0; i < this.tickables.size(); ++i) {
-+                ((Runnable) this.tickables.get(i)).run();
-+            }
-+            // MinecraftTimings.tickablesTimer.stopTiming(); // Spigot // Paper
- 
--        MinecraftTimings.tickablesTimer.startTiming(); // Spigot // Paper
--        for (int i = 0; i < this.tickables.size(); ++i) {
--            ((Runnable) this.tickables.get(i)).run();
-+            this.methodProfiler.exit();
-+            // Titanium end - Real DIM-threading work
+         // Tuinity - replace logic
+         MinecraftTimings.bukkitSchedulerTimer.startTiming(); // Spigot // Paper
+@@ -1395,7 +1429,29 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
          }
--        MinecraftTimings.tickablesTimer.stopTiming(); // Spigot // Paper
+         // Paper end
+         MinecraftTimings.timeUpdateTimer.stopTiming(); // Spigot // Paper
 -
--        this.methodProfiler.exit();
++    
++        // Titanium start - Async worlds ticking
++        asyncWorlds = true;
++        try {
++            worldTick = worldPool.invokeAll(new ArrayList<WorldServer>(this.worldServer.values())).parallelStream().mapToLong(f -> {
++                try {
++                    return f.get();
++                } catch (InterruptedException e) {
++                    e.printStackTrace();
++                } catch (ExecutionException e) {
++                    e.printStackTrace();
++                }
++                return 100000;
++            }).sum();
++        } catch (InterruptedException e) {
++            e.printStackTrace();
++        }
++        // Titanium end - Async worlds ticking
++    
++        // Titanium start - remove non-async ticking
++        /*
++        asyncWorlds = false;
++        long start = System.currentTimeMillis();
+         while (iterator.hasNext()) {
+             WorldServer worldserver = (WorldServer) iterator.next();
+             worldserver.hasPhysicsEvent =  org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper
+@@ -1413,7 +1469,7 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+                 this.methodProfiler.exit();
+             }
+             // CraftBukkit end */
+-
++            /*
+             this.methodProfiler.enter("tick");
+ 
+             try {
+@@ -1441,7 +1497,7 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+             this.methodProfiler.exit();
+             this.methodProfiler.exit();
+             worldserver.explosionDensityCache.clear(); // Paper - Optimize explosions
+-        }
++        
+ 
+         this.methodProfiler.exitEnter("connection");
+         MinecraftTimings.connectionTimer.startTiming(); // Spigot
+@@ -1464,6 +1520,8 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+         MinecraftTimings.tickablesTimer.stopTiming(); // Spigot // Paper
+ 
+         this.methodProfiler.exit();
++    */
++    // Titanium end - remove non-async ticking
      }
  
      public boolean getAllowNether() {
-@@ -1495,9 +1564,11 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
-         return this.worldServer.keySet();
-     }
- 
--    public Iterable<WorldServer> getWorlds() {
--        return this.worldServer.values();
--    }
-+    // Titanium start - Move up
-+    // public Iterable<WorldServer> getWorlds() {
-+    //     return this.worldServer.values();
-+    // }
-+    // Titanium end - Move up
- 
-     public String getVersion() {
-         return SharedConstants.getGameVersion().getName();
-@@ -1898,7 +1969,7 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
+@@ -1898,7 +1956,7 @@ public abstract class MinecraftServer extends IAsyncTaskHandlerReentrant<TickTas
              this.saveData.a(a(this.resourcePackRepository));
              datapackresources.i();
              new ServerResourcesReloadedEvent(cause).callEvent(); // Paper
 -            if (Thread.currentThread() != this.serverThread) return; // Paper
-+            if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) return; // Paper
++            if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) return; // Paper
              //this.getPlayerList().savePlayers(); // Paper - we don't need to do this
              this.getPlayerList().reload();
              this.customFunctionData.a(this.dataPackResources.a());
+diff --git a/src/main/java/net/minecraft/server/PlayerChunkMap.java b/src/main/java/net/minecraft/server/PlayerChunkMap.java
+index 13948d6225efc4bbac87788d970d00e6a62586a1..2888ea7da5ae9802b21d3ccf0fd92eaade5be13a 100644
+--- a/src/main/java/net/minecraft/server/PlayerChunkMap.java
++++ b/src/main/java/net/minecraft/server/PlayerChunkMap.java
+@@ -26,6 +26,8 @@ import java.io.File;
+ import java.io.IOException;
+ import java.io.Writer;
+ import java.util.HashMap; // Paper
++import java.util.HashSet;
++import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Iterator;
+ import java.util.List;
+@@ -706,7 +708,7 @@ public class PlayerChunkMap extends IChunkLoader implements PlayerChunk.d {
+     public Long2ObjectLinkedOpenHashMap<PlayerChunk> getVisibleChunks() {
+         // AirplaneL start
+         /*
+-        if (Thread.currentThread() == this.world.serverThread) {
++        if (me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
+             return this.visibleChunks;
+         } else {
+             synchronized (this.visibleChunks) {
+@@ -728,7 +730,7 @@ public class PlayerChunkMap extends IChunkLoader implements PlayerChunk.d {
+         // AirplaneL start
+         /*
+         // Paper start - mt safe get
+-        if (Thread.currentThread() != this.world.serverThread) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
+             synchronized (this.visibleChunks) {
+                 return (PlayerChunk) (this.hasPendingVisibleUpdate ? this.pendingVisibleChunks.get(i) : ((ProtectedVisibleChunksMap)this.visibleChunks).safeGet(i));
+             }
+@@ -2474,7 +2476,7 @@ Sections go from 0..16. Now whenever a section is not empty, it can potentially
+         }
+ 
+         public void broadcast(Packet<?> packet) {
+-            Iterator iterator = this.trackedPlayers.iterator();
++            Iterator iterator = new HashSet<>(this.trackedPlayers).iterator();
+ 
+             while (iterator.hasNext()) {
+                 EntityPlayer entityplayer = (EntityPlayer) iterator.next();
+@@ -2493,7 +2495,7 @@ Sections go from 0..16. Now whenever a section is not empty, it can potentially
+         }
+ 
+         public void a() {
+-            Iterator iterator = this.trackedPlayers.iterator();
++            Iterator iterator = new HashSet<>(this.trackedPlayers).iterator();
+ 
+             while (iterator.hasNext()) {
+                 EntityPlayer entityplayer = (EntityPlayer) iterator.next();
+@@ -2579,7 +2581,7 @@ Sections go from 0..16. Now whenever a section is not empty, it can potentially
+         }
+ 
+         public void track(List<EntityPlayer> list) {
+-            Iterator iterator = list.iterator();
++            Iterator iterator = new ArrayList<>(list).iterator();
+ 
+             while (iterator.hasNext()) {
+                 EntityPlayer entityplayer = (EntityPlayer) iterator.next();
+diff --git a/src/main/java/net/minecraft/server/PlayerConnectionUtils.java b/src/main/java/net/minecraft/server/PlayerConnectionUtils.java
+index e698dd22607b2b2c4068c5bfb03ac53eb5bac080..d9edafa061487449153c8c076fbcf31065264b27 100644
+--- a/src/main/java/net/minecraft/server/PlayerConnectionUtils.java
++++ b/src/main/java/net/minecraft/server/PlayerConnectionUtils.java
+@@ -4,13 +4,21 @@ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+ import co.aikar.timings.MinecraftTimings; // Paper
+ import co.aikar.timings.Timing; // Paper
++import co.aikar.timings.Timings;
+ 
+ public class PlayerConnectionUtils {
+ 
+     private static final Logger LOGGER = LogManager.getLogger();
+ 
+     public static <T extends PacketListener> void ensureMainThread(Packet<T> packet, T t0, WorldServer worldserver) throws CancelledPacketHandleException {
+-        ensureMainThread(packet, t0, (IAsyncTaskHandler) worldserver.getMinecraftServer());
++		if (Timings.isTimingsEnabled() || packet instanceof PacketPlayInCustomPayload) {
++			ensureMainThread(packet, t0, (IAsyncTaskHandler) worldserver.getMinecraftServer());
++		} else {
++			if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
++				worldserver.packets.add(() -> packet.a(t0));
++				throw CancelledPacketHandleException.INSTANCE;
++			}
++		}
+     }
+ 
+     // Tuinity start - detailed watchdog information
 diff --git a/src/main/java/net/minecraft/server/World.java b/src/main/java/net/minecraft/server/World.java
-index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..5acc247baa503387dcb5776f107a18af08e73cc6 100644
+index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..db2e9c7cd70d8059c8f4478ff319ab4cdbd5cbef 100644
 --- a/src/main/java/net/minecraft/server/World.java
 +++ b/src/main/java/net/minecraft/server/World.java
-@@ -32,8 +32,22 @@ import org.bukkit.craftbukkit.block.CraftBlockState;
- import org.bukkit.craftbukkit.block.data.CraftBlockData;
- import org.bukkit.event.block.BlockPhysicsEvent;
- // CraftBukkit end
-+import me.titaniumtown.dimthread.thread.IMutableMainThread; // Titanium - import for DIM-threading
- 
--public abstract class World implements GeneratorAccess, AutoCloseable {
-+public abstract class World implements GeneratorAccess, AutoCloseable, IMutableMainThread { // Titanium 
-+    // Titanium start - DIM-threading work
-+    private Thread thread;
-+
-+    @Override
-+	public Thread getMainThread() {
-+		return this.thread;
-+	}
-+    
-+    @Override
-+	public void setMainThread(Thread thread) {
-+		this.thread = thread;
-+	}
-+    // Titanium end - DIM-threading work
- 
-     protected static final Logger LOGGER = LogManager.getLogger();
-     public static final Codec<ResourceKey<World>> f = MinecraftKey.a.xmap(ResourceKey.b(IRegistry.L), ResourceKey::a);
-@@ -45,7 +59,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
+@@ -45,7 +45,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
      public final List<TileEntity> tileEntityListTick = Lists.newArrayList();
      protected final List<TileEntity> tileEntityListPending = Lists.newArrayList();
      protected final java.util.Set<TileEntity> tileEntityListUnload = com.google.common.collect.Sets.newHashSet();
@@ -745,7 +523,7 @@ index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..5acc247baa503387dcb5776f107a18af
      private final boolean debugWorld;
      private int d;
      protected int n = (new Random()).nextInt();
-@@ -233,7 +247,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
+@@ -233,7 +233,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
              this.worldBorder = new WorldBorder();
          }
  
@@ -754,52 +532,127 @@ index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..5acc247baa503387dcb5776f107a18af
          this.biomeManager = new BiomeManager(this, i, dimensionmanager.getGenLayerZoomer());
          this.debugWorld = flag1;
          // CraftBukkit start
-@@ -1112,7 +1126,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
+@@ -1112,7 +1112,7 @@ public abstract class World implements GeneratorAccess, AutoCloseable {
          // CraftBukkit end
          if (isOutsideWorld(blockposition)) {
              return null;
 -        } else if (!this.isClientSide && Thread.currentThread() != this.serverThread) {
-+        } else if (!this.isClientSide && !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        } else if (!this.isClientSide && !me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              return null;
          } else {
              // CraftBukkit start
 diff --git a/src/main/java/net/minecraft/server/WorldServer.java b/src/main/java/net/minecraft/server/WorldServer.java
-index 0e2bbf292be2bd20b01ec6e630ea3d8a8e8d3cc8..6322f50b97f4318556a222ffca1fcb97f6d4d320 100644
+index 0e2bbf292be2bd20b01ec6e630ea3d8a8e8d3cc8..9b646c32be55597642a9bed9574043971b05eb8a 100644
 --- a/src/main/java/net/minecraft/server/WorldServer.java
 +++ b/src/main/java/net/minecraft/server/WorldServer.java
-@@ -241,7 +241,7 @@ public class WorldServer extends World implements GeneratorAccessSeed {
+@@ -23,6 +23,7 @@ import java.io.BufferedWriter;
+ import java.io.IOException;
+ import java.io.Writer;
+ import java.nio.file.Files;
++import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Comparator;
+ import java.util.Iterator;
+@@ -33,6 +34,7 @@ import java.util.Optional;
+ import java.util.Queue;
+ import java.util.Set;
+ import java.util.UUID;
++import java.util.concurrent.Callable;
+ import java.util.concurrent.Executor;
+ import java.util.function.BooleanSupplier;
+ import java.util.function.Function;
+@@ -57,7 +59,7 @@ import org.bukkit.event.world.TimeSkipEvent;
+ // CraftBukkit end
+ import it.unimi.dsi.fastutil.ints.IntArrayList; // Tuinity
+ 
+-public class WorldServer extends World implements GeneratorAccessSeed {
++public class WorldServer extends World implements GeneratorAccessSeed, Callable<Long> {
+ 
+     public static final BlockPosition a = new BlockPosition(100, 50, 0);
+     private static final Logger LOGGER = LogManager.getLogger();
+@@ -241,7 +243,7 @@ public class WorldServer extends World implements GeneratorAccessSeed {
  
      public final void loadChunksForMoveAsync(AxisAlignedBB axisalignedbb, int toX, int toZ, // Yatopia
                                               java.util.function.Consumer<List<IChunkAccess>> onLoad) {
 -        if (Thread.currentThread() != this.serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              this.getChunkProvider().serverThreadQueue.execute(() -> {
                  this.loadChunksForMoveAsync(axisalignedbb, toX, toZ, onLoad);
              });
-@@ -634,7 +634,7 @@ public class WorldServer extends World implements GeneratorAccessSeed {
+@@ -634,7 +636,7 @@ public class WorldServer extends World implements GeneratorAccessSeed {
      @Override
      protected TileEntity getTileEntity(BlockPosition pos, boolean validate) {
          TileEntity result = super.getTileEntity(pos, validate);
 -        if (!validate || Thread.currentThread() != this.serverThread) {
-+        if (!validate || !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!validate || !me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              // SPIGOT-5378: avoid deadlock, this can be called in loading logic (i.e lighting) but getType() will block on chunk load
              return result;
          }
+@@ -2769,6 +2771,41 @@ public class WorldServer extends World implements GeneratorAccessSeed {
+         });
+     }
+ 
++    public List<Runnable> packets = new ArrayList<Runnable>();
++    
++	@Override
++	public Long call() throws Exception {
++		long start = System.currentTimeMillis();
++		List<Runnable> copy = new ArrayList<>(packets);
++		copy.forEach(r -> {
++			packets.remove(r);
++			r.run();
++		});
++        hasPhysicsEvent =  org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper
++        TileEntityHopper.skipHopperEvents = paperConfig.disableHopperMoveEvents || org.bukkit.event.inventory.InventoryMoveItemEvent.getHandlerList().getRegisteredListeners().length == 0; // Paper
++
++        try {
++            doTick(server::canSleepForTick);
++        } catch (Throwable throwable) {
++            // Spigot Start
++            CrashReport crashreport;
++            try {
++                crashreport = CrashReport.a(throwable, "Exception ticking world");
++            } catch (Throwable t) {
++                throw new RuntimeException("Error generating crash report", t);
++            }
++            // Spigot End
++
++            a(crashreport);
++            throw new ReportedException(crashreport);
++        }
++
++        explosionDensityCache.clear(); // Paper - Optimize explosions
++		return System.currentTimeMillis() - start;
++	}
++	
++
++
+     @Override
+     public void update(BlockPosition blockposition, Block block) {
+         if (!this.isDebugWorld()) {
 diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
-index 491c91fa4c8901c5c3ec61679508211556164890..20e68187884dabd6299a8ff65cd5cfc0ad89fc70 100644
+index 491c91fa4c8901c5c3ec61679508211556164890..dc1edd0e2e730928af4e000f6d8a394502c0d25b 100644
 --- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
-@@ -1868,7 +1868,7 @@ public final class CraftServer implements Server {
+@@ -231,6 +231,7 @@ import net.md_5.bungee.api.chat.BaseComponent; // Spigot
+ import javax.annotation.Nullable; // Paper
+ import javax.annotation.Nonnull; // Paper
+ 
++
+ public final class CraftServer implements Server {
+     private final String serverName = "Purpur"; // Paper // Tuinity // Purpur
+     private final String serverVersion;
+@@ -1868,7 +1869,7 @@ public final class CraftServer implements Server {
      public boolean isPrimaryThread() {
          // Tuinity start
          final Thread currThread = Thread.currentThread();
 -        return currThread == console.serverThread || currThread instanceof com.tuinity.tuinity.util.TickThread || currThread.equals(net.minecraft.server.MinecraftServer.getServer().shutdownThread); // Paper - Fix issues with detecting main thread properly, the only time Watchdog will be used is during a crash shutdown which is a "try our best" scenario
-+        return me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread()) || currThread == console.serverThread || currThread instanceof com.tuinity.tuinity.util.TickThread || currThread.equals(net.minecraft.server.MinecraftServer.getServer().shutdownThread); // Paper - Fix issues with detecting main thread properly, the only time Watchdog will be used is during a crash shutdown which is a "try our best" scenario
++        return me.titaniumtown.MainThreadHandler.isMainThread(currThread) || currThread == console.serverThread || currThread instanceof com.tuinity.tuinity.util.TickThread || currThread.equals(net.minecraft.server.MinecraftServer.getServer().shutdownThread); // Paper - Fix issues with detecting main thread properly, the only time Watchdog will be used is during a crash shutdown which is a "try our best" scenario
          // Tuinity End
      }
  
 diff --git a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
-index 8904b39db2203118fe3589133cb7e64334c20f33..71849d76fe1865ebe2b49499e2317b784976fa07 100644
+index 8904b39db2203118fe3589133cb7e64334c20f33..d81661901b87d32227ca8701daa387b1b1ba8971 100644
 --- a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
 @@ -469,7 +469,7 @@ public class CraftWorld implements World {
@@ -807,44 +660,277 @@ index 8904b39db2203118fe3589133cb7e64334c20f33..71849d76fe1865ebe2b49499e2317b78
      public Chunk[] getLoadedChunks() {
          // Paper start
 -        if (Thread.currentThread() != world.getMinecraftWorld().serverThread) {
-+        if (!me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) {
++        if (!me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread())) {
              synchronized (world.getChunkProvider().playerChunkMap.visibleChunks) {
                  Long2ObjectLinkedOpenHashMap<PlayerChunk> chunks = world.getChunkProvider().playerChunkMap.visibleChunks;
                  return chunks.values().stream().map(PlayerChunk::getFullChunk).filter(Objects::nonNull).map(net.minecraft.server.Chunk::getBukkitChunk).toArray(Chunk[]::new);
+@@ -677,7 +677,10 @@ public class CraftWorld implements World {
+     @Override
+     public Collection<Plugin> getPluginChunkTickets(int x, int z) {
+         ChunkMapDistance chunkDistanceManager = this.world.getChunkProvider().playerChunkMap.chunkDistanceManager;
+-        ArraySetSorted<Ticket<?>> tickets = chunkDistanceManager.tickets.get(ChunkCoordIntPair.pair(x, z));
++        ArraySetSorted<Ticket<?>> tickets = null;
++        synchronized (chunkDistanceManager.tickets) {
++        	tickets = chunkDistanceManager.tickets.get(ChunkCoordIntPair.pair(x, z));
++		}
+ 
+         if (tickets == null) {
+             return Collections.emptyList();
+@@ -697,7 +700,7 @@ public class CraftWorld implements World {
+     public Map<Plugin, Collection<Chunk>> getPluginChunkTickets() {
+         Map<Plugin, ImmutableList.Builder<Chunk>> ret = new HashMap<>();
+         ChunkMapDistance chunkDistanceManager = this.world.getChunkProvider().playerChunkMap.chunkDistanceManager;
+-
++        synchronized (chunkDistanceManager.tickets) {
+         for (Long2ObjectMap.Entry<ArraySetSorted<Ticket<?>>> chunkTickets : chunkDistanceManager.tickets.long2ObjectEntrySet()) {
+             long chunkKey = chunkTickets.getLongKey();
+             ArraySetSorted<Ticket<?>> tickets = chunkTickets.getValue();
+@@ -714,7 +717,7 @@ public class CraftWorld implements World {
+ 
+                 ret.computeIfAbsent((Plugin) ticket.identifier, (key) -> ImmutableList.builder()).add(chunk);
+             }
+-        }
++        }}
+ 
+         return ret.entrySet().stream().collect(ImmutableMap.toImmutableMap(Map.Entry::getKey, (entry) -> entry.getValue().build()));
+     }
+diff --git a/src/main/java/org/bukkit/craftbukkit/util/WeakCollection.java b/src/main/java/org/bukkit/craftbukkit/util/WeakCollection.java
+index 3c8946837351bf5a469be494b735d414e1801c20..c0369adfd825e8b2ea9c83a63c15cc686eb7b862 100644
+--- a/src/main/java/org/bukkit/craftbukkit/util/WeakCollection.java
++++ b/src/main/java/org/bukkit/craftbukkit/util/WeakCollection.java
+@@ -18,23 +18,29 @@ public final class WeakCollection<T> implements Collection<T> {
+     @Override
+     public boolean add(T value) {
+         Validate.notNull(value, "Cannot add null value");
+-        return collection.add(new WeakReference<T>(value));
++        synchronized (collection) {
++        	return collection.add(new WeakReference<T>(value));
++		}
+     }
+ 
+     @Override
+     public boolean addAll(Collection<? extends T> collection) {
+-        Collection<WeakReference<T>> values = this.collection;
+-        boolean ret = false;
+-        for (T value : collection) {
+-            Validate.notNull(value, "Cannot add null value");
+-            ret |= values.add(new WeakReference<T>(value));
+-        }
+-        return ret;
++    	synchronized (collection) {
++	        Collection<WeakReference<T>> values = this.collection;
++	        boolean ret = false;
++	        for (T value : collection) {
++	            Validate.notNull(value, "Cannot add null value");
++	            ret |= values.add(new WeakReference<T>(value));
++	        }
++	        return ret;
++    	}
+     }
+ 
+     @Override
+     public void clear() {
+-        collection.clear();
++    	synchronized (collection) {
++    		collection.clear();
++    	}
+     }
+ 
+     @Override
+@@ -42,17 +48,21 @@ public final class WeakCollection<T> implements Collection<T> {
+         if (object == null) {
+             return false;
+         }
+-        for (T compare : this) {
+-            if (object.equals(compare)) {
+-                return true;
+-            }
++        synchronized (collection) {
++	        for (T compare : this) {
++	            if (object.equals(compare)) {
++	                return true;
++	            }
++	        }
++	        return false;
+         }
+-        return false;
+     }
+ 
+     @Override
+     public boolean containsAll(Collection<?> collection) {
+-        return toCollection().containsAll(collection);
++    	synchronized (collection) {
++    		return toCollection().containsAll(collection);
++    	}
+     }
+ 
+     @Override
+@@ -73,20 +83,22 @@ public final class WeakCollection<T> implements Collection<T> {
+                     return true;
+                 }
+ 
+-                Iterator<WeakReference<T>> it = this.it;
+-                value = null;
+-
+-                while (it.hasNext()) {
+-                    WeakReference<T> ref = it.next();
+-                    value = ref.get();
+-                    if (value == null) {
+-                        it.remove();
+-                    } else {
+-                        this.value = value;
+-                        return true;
+-                    }
++                synchronized (collection) {
++	                Iterator<WeakReference<T>> it = this.it;
++	                value = null;
++	
++	                while (it.hasNext()) {
++	                    WeakReference<T> ref = it.next();
++	                    value = ref.get();
++	                    if (value == null) {
++	                        it.remove();
++	                    } else {
++	                        this.value = value;
++	                        return true;
++	                    }
++	                }
++	                return false;
+                 }
+-                return false;
+             }
+ 
+             @Override
+@@ -119,49 +131,57 @@ public final class WeakCollection<T> implements Collection<T> {
+             return false;
+         }
+ 
+-        Iterator<T> it = this.iterator();
+-        while (it.hasNext()) {
+-            if (object.equals(it.next())) {
+-                it.remove();
+-                return true;
+-            }
++        synchronized (collection) {
++	        Iterator<T> it = this.iterator();
++	        while (it.hasNext()) {
++	            if (object.equals(it.next())) {
++	                it.remove();
++	                return true;
++	            }
++	        }
++	        return false;
+         }
+-        return false;
+     }
+ 
+     @Override
+     public boolean removeAll(Collection<?> collection) {
+-        Iterator<T> it = this.iterator();
+-        boolean ret = false;
+-        while (it.hasNext()) {
+-            if (collection.contains(it.next())) {
+-                ret = true;
+-                it.remove();
+-            }
+-        }
+-        return ret;
++    	synchronized (collection) {
++	        Iterator<T> it = this.iterator();
++	        boolean ret = false;
++	        while (it.hasNext()) {
++	            if (collection.contains(it.next())) {
++	                ret = true;
++	                it.remove();
++	            }
++	        }
++	        return ret;
++    	}
+     }
+ 
+     @Override
+     public boolean retainAll(Collection<?> collection) {
+-        Iterator<T> it = this.iterator();
+-        boolean ret = false;
+-        while (it.hasNext()) {
+-            if (!collection.contains(it.next())) {
+-                ret = true;
+-                it.remove();
+-            }
+-        }
+-        return ret;
++    	synchronized (collection) {
++	        Iterator<T> it = this.iterator();
++	        boolean ret = false;
++	        while (it.hasNext()) {
++	            if (!collection.contains(it.next())) {
++	                ret = true;
++	                it.remove();
++	            }
++	        }
++	        return ret;
++    	}
+     }
+ 
+     @Override
+     public int size() {
+-        int s = 0;
+-        for (T value : this) {
+-            s++;
+-        }
+-        return s;
++    	synchronized (collection) {
++	        int s = 0;
++	        for (T value : this) {
++	            s++;
++	        }
++	        return s;
++    	}
+     }
+ 
+     @Override
+@@ -175,10 +195,12 @@ public final class WeakCollection<T> implements Collection<T> {
+     }
+ 
+     private Collection<T> toCollection() {
+-        ArrayList<T> collection = new ArrayList<T>();
+-        for (T value : this) {
+-            collection.add(value);
+-        }
+-        return collection;
++    	synchronized (collection) {
++	        ArrayList<T> collection = new ArrayList<T>();
++	        for (T value : this) {
++	            collection.add(value);
++	        }
++	        return collection;
++    	}
+     }
+ }
 diff --git a/src/main/java/org/spigotmc/AsyncCatcher.java b/src/main/java/org/spigotmc/AsyncCatcher.java
-index 51e9c54cddf4b28ba3d3d892322c487774bdab70..d4673792aba012a928a038376e7da243acf559e7 100644
+index 51e9c54cddf4b28ba3d3d892322c487774bdab70..55d8cefad8bccda02afbdab175b44f8cd3163c3a 100644
 --- a/src/main/java/org/spigotmc/AsyncCatcher.java
 +++ b/src/main/java/org/spigotmc/AsyncCatcher.java
-@@ -5,12 +5,12 @@ import net.minecraft.server.MinecraftServer;
- public class AsyncCatcher
- {
- 
--    public static boolean enabled = true;
-+    public static boolean enabled = false; // Titanium - async world ticking
-     public static boolean shuttingDown = false; // Paper
+@@ -10,7 +10,7 @@ public class AsyncCatcher
  
      public static void catchOp(String reason)
      {
 -        if ( ( enabled || com.tuinity.tuinity.util.TickThread.STRICT_THREAD_CHECKS ) && !org.bukkit.Bukkit.isPrimaryThread() ) // Tuinity
-+        if ( ( enabled || com.tuinity.tuinity.util.TickThread.STRICT_THREAD_CHECKS ) && !org.bukkit.Bukkit.isPrimaryThread() && !me.titaniumtown.dimthread.DimThread.owns(Thread.currentThread())) // Tuinity // Titanium - async world ticking
++        if ( ( enabled || com.tuinity.tuinity.util.TickThread.STRICT_THREAD_CHECKS ) && !org.bukkit.Bukkit.isPrimaryThread() && !me.titaniumtown.MainThreadHandler.isMainThread(Thread.currentThread()) ) // Tuinity
          {
              MinecraftServer.LOGGER.fatal("Thread " + Thread.currentThread().getName() + " failed thread check for reason: Asynchronous " + reason, new Throwable()); // Tuinity - not all exceptions are printed
              throw new IllegalStateException( "Asynchronous " + reason + "!" );
 diff --git a/src/main/java/org/spigotmc/TicksPerSecondCommand.java b/src/main/java/org/spigotmc/TicksPerSecondCommand.java
-index 3c7b9a6d24e064f9c1ec5fb6d52f42627944d7fa..fe8636519166afbd98e033b1dee50eca8feb868d 100644
+index 3c7b9a6d24e064f9c1ec5fb6d52f42627944d7fa..f491872102ea2b1e25a64ab866a94158b373a7b7 100644
 --- a/src/main/java/org/spigotmc/TicksPerSecondCommand.java
 +++ b/src/main/java/org/spigotmc/TicksPerSecondCommand.java
-@@ -34,6 +34,13 @@ public class TicksPerSecondCommand extends Command
+@@ -34,6 +34,9 @@ public class TicksPerSecondCommand extends Command
              tpsAvg[i] = format( tps[i] );
          }
          sender.sendMessage(ChatColor.GOLD + "TPS from last 5s, 1m, 5m, 15m: " + org.apache.commons.lang.StringUtils.join(tpsAvg, ", ")); // Purpur
-+        // Titanium start - add async ticking /tps messages
-+        sender.sendMessage( ChatColor.GOLD + "Async world ticking: " + me.titaniumtown.TitaniumConfig.dimThreading);
-+        if (me.titaniumtown.TitaniumConfig.dimThreading) {
-+            sender.sendMessage( ChatColor.GOLD + "Threads being used for async world ticking " + me.titaniumtown.TitaniumConfig.dimThreadingThreads);
-+            // sender.sendMessage( ChatColor.GOLD + "The worlds where ticking for " + net.minecraft.server.MinecraftServer.worldTick + "ms"); // TODO
-+        }
-+        // Titanium end
++        // Titanium start - Async worlds tps info
++        sender.sendMessage( ChatColor.GOLD + "The worlds where ticking for " + net.minecraft.server.MinecraftServer.worldTick + "ms");
++        // Titanium end - Async worlds tps info
          if (args.length > 0 && args[0].equals("mem") && sender.hasPermission("bukkit.command.tpsmemory")) {
              sender.sendMessage(ChatColor.GOLD + "Current Memory Usage: " + ChatColor.GREEN + ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024)) + "/" + (Runtime.getRuntime().totalMemory() / (1024 * 1024)) + " mb (Max: " + (Runtime.getRuntime().maxMemory() / (1024 * 1024)) + " mb)");
              if (!hasShownMemoryWarning) {
