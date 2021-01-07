@@ -289,7 +289,7 @@ index 0000000000000000000000000000000000000000..a9c5dbf37fb8106d58b5b767a2a584af
 \ No newline at end of file
 diff --git a/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/StatePropertyTableCache.java b/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/StatePropertyTableCache.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..415774ac575f9fa2a665ac1df6c2451e24273843
+index 0000000000000000000000000000000000000000..f3903c1b3ef8a075d118200000ec0fde92383a63
 --- /dev/null
 +++ b/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/StatePropertyTableCache.java
 @@ -0,0 +1,33 @@
@@ -317,7 +317,7 @@ index 0000000000000000000000000000000000000000..415774ac575f9fa2a665ac1df6c2451e
 +
 +    @SuppressWarnings("unchecked")
 +    public static <S, O> FastImmutableTableCache<IBlockState<?>, Comparable<?>, S> getTableCache(O owner) {
-+        if (owner instanceof Block) {
++        if (owner instanceof IBlockData) {
 +            return (FastImmutableTableCache<IBlockState<?>, Comparable<?>, S>) BLOCK_STATE_TABLE;
 +        } else if (owner instanceof Fluid) {
 +            return (FastImmutableTableCache<IBlockState<?>, Comparable<?>, S>) FLUID_STATE_TABLE;
