@@ -250,7 +250,7 @@ index 0000000000000000000000000000000000000000..2c9b5aa7283c880bc95b4c3a43dd3da4
 +}
 +
 diff --git a/src/main/java/net/minecraft/server/ChunkProviderServer.java b/src/main/java/net/minecraft/server/ChunkProviderServer.java
-index 83e3dcbbe36ce1f947f387ec55067e51a1b7384a..8f9ccb3cf09feecfaa1d01f7e1641d98891b4f46 100644
+index 41d20589cca42b74816a5801463ccec80bad1385..20601379dd39002d0dfd552955a3e745a4d53c39 100644
 --- a/src/main/java/net/minecraft/server/ChunkProviderServer.java
 +++ b/src/main/java/net/minecraft/server/ChunkProviderServer.java
 @@ -27,14 +27,28 @@ import it.unimi.dsi.fastutil.objects.Object2BooleanLinkedOpenHashMap;
@@ -733,7 +733,7 @@ index 3e8d62a55b2dbd3a488e578f177fda599312c0c9..5acc247baa503387dcb5776f107a18af
          } else {
              // CraftBukkit start
 diff --git a/src/main/java/net/minecraft/server/WorldServer.java b/src/main/java/net/minecraft/server/WorldServer.java
-index 0e2bbf292be2bd20b01ec6e630ea3d8a8e8d3cc8..0d102de4964db7b26fc449c6c0651829d40cf64b 100644
+index 7060a447e603786ed0df57dab3945477a7e4afc5..d0cc20524fa736d5ee39cfef58047eba67d95a17 100644
 --- a/src/main/java/net/minecraft/server/WorldServer.java
 +++ b/src/main/java/net/minecraft/server/WorldServer.java
 @@ -241,7 +241,7 @@ public class WorldServer extends World implements GeneratorAccessSeed {
