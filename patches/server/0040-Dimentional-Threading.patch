@@ -631,7 +631,7 @@ index 0e2bbf292be2bd20b01ec6e630ea3d8a8e8d3cc8..9b646c32be55597642a9bed957404397
      public void update(BlockPosition blockposition, Block block) {
          if (!this.isDebugWorld()) {
 diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
-index 491c91fa4c8901c5c3ec61679508211556164890..dc1edd0e2e730928af4e000f6d8a394502c0d25b 100644
+index 5b4046ca3b311c2aeaca31bc0af6547cf6d064f7..6b722a594a2a235028bd9da38330f0dcd9523d56 100644
 --- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
 @@ -231,6 +231,7 @@ import net.md_5.bungee.api.chat.BaseComponent; // Spigot
@@ -640,7 +640,7 @@ index 491c91fa4c8901c5c3ec61679508211556164890..dc1edd0e2e730928af4e000f6d8a3945
  
 +
  public final class CraftServer implements Server {
-     private final String serverName = "Purpur"; // Paper // Tuinity // Purpur
+     private final String serverName = "Titanium"; // Paper // Tuinity // Purpur // Titanium
      private final String serverVersion;
 @@ -1868,7 +1869,7 @@ public final class CraftServer implements Server {
      public boolean isPrimaryThread() {
