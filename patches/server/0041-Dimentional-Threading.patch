@@ -4,19 +4,6 @@ Date: Mon, 4 Jan 2021 21:06:13 -0500
 Subject: [PATCH] Dimentional Threading
 
 
-diff --git a/src/main/java/com/tuinity/tuinity/util/TickThread.java b/src/main/java/com/tuinity/tuinity/util/TickThread.java
-index 08ed243259f052165c6f75aed1d1d65a14219715..c226432f1c058cd82877786fcab07829716b7bbe 100644
---- a/src/main/java/com/tuinity/tuinity/util/TickThread.java
-+++ b/src/main/java/com/tuinity/tuinity/util/TickThread.java
-@@ -22,7 +22,7 @@ public final class TickThread extends Thread {
- 
- 
-     public static void ensureTickThread(final String reason) {
--        if (!Bukkit.isPrimaryThread()) {
-+        if (!Bukkit.isPrimaryThread()) {
-             MinecraftServer.LOGGER.fatal("Thread " + Thread.currentThread().getName() + " failed main thread check: " + reason, new Throwable());
-             throw new IllegalStateException(reason);
-         }
 diff --git a/src/main/java/me/titaniumtown/DimThread/DimThread.java b/src/main/java/me/titaniumtown/DimThread/DimThread.java
 new file mode 100644
 index 0000000000000000000000000000000000000000..ff119aab59e914c3c760b752dc5b10db9a8eee00
