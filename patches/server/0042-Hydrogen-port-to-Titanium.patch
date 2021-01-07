@@ -1,0 +1,659 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hugo Planque <hookwood01@gmail.com>
+Date: Thu, 7 Jan 2021 20:09:39 +0100
+Subject: [PATCH] Hydrogen port to Titanium
+
+
+diff --git a/src/main/java/me/jellysquid/mods/lithium/common/util/collections/FastImmutableTable.java b/src/main/java/me/jellysquid/mods/lithium/common/util/collections/FastImmutableTable.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..a7cf66aef127f0eafade5e6f79ed4e73b9f989ed
+--- /dev/null
++++ b/src/main/java/me/jellysquid/mods/lithium/common/util/collections/FastImmutableTable.java
+@@ -0,0 +1,226 @@
++package me.jellysquid.mods.lithium.common.util.collections;
++import com.google.common.collect.Table;
++import it.unimi.dsi.fastutil.Hash;
++import it.unimi.dsi.fastutil.HashCommon;
++import me.jellysquid.mods.lithium.common.util.collections.cache.FastImmutableTableCache;
++import org.apache.commons.lang3.ArrayUtils;
++
++import java.util.Collection;
++import java.util.Map;
++import java.util.Set;
++
++import static it.unimi.dsi.fastutil.HashCommon.arraySize;
++
++public class FastImmutableTable<R, C, V> implements Table<R, C, V> {
++    private R[] rowKeys;
++    private int[] rowIndices;
++    private final int rowMask;
++
++    private C[] colKeys;
++    private int[] colIndices;
++    private final int colMask;
++    private final int colCount;
++
++    private V[] values;
++    private final int size;
++
++    @SuppressWarnings("unchecked")
++    public FastImmutableTable(Table<R, C, V> table, FastImmutableTableCache<R, C, V> cache) {
++        if (cache == null) {
++            throw new IllegalArgumentException("Cache must not be null");
++        }
++
++        float loadFactor = Hash.DEFAULT_LOAD_FACTOR;
++
++        Set<R> rowKeySet = table.rowKeySet();
++        Set<C> colKeySet = table.columnKeySet();
++
++        int rowCount = rowKeySet.size();
++        this.colCount = colKeySet.size();
++
++        int rowN = arraySize(rowCount, loadFactor);
++        int colN = arraySize(this.colCount, loadFactor);
++
++        this.rowMask = rowN - 1;
++        this.rowKeys = (R[]) new Object[rowN];
++        this.rowIndices = new int[rowN];
++
++        this.colMask = colN - 1;
++        this.colKeys = (C[]) new Object[colN];
++        this.colIndices = new int[colN];
++
++        this.createIndex(this.colKeys, this.colIndices, this.colMask, colKeySet);
++        this.createIndex(this.rowKeys, this.rowIndices, this.rowMask, rowKeySet);
++
++        this.values = (V[]) new Object[rowCount * this.colCount];
++
++        for (Cell<R, C, V> cell : table.cellSet()) {
++            int colIdx = this.getIndex(this.colKeys, this.colIndices, this.colMask, cell.getColumnKey());
++            int rowIdx = this.getIndex(this.rowKeys, this.rowIndices, this.rowMask, cell.getRowKey());
++
++            if (colIdx < 0 || rowIdx < 0) {
++                throw new IllegalStateException("Missing index for " + cell);
++            }
++
++            this.values[this.colCount * rowIdx + colIdx] = cell.getValue();
++        }
++
++        this.size = table.size();
++
++        this.rowKeys = cache.dedupRows(this.rowKeys);
++        this.rowIndices = cache.dedupIndices(this.rowIndices);
++
++        this.colIndices = cache.dedupIndices(this.colIndices);
++        this.colKeys = cache.dedupColumns(this.colKeys);
++
++        this.values = cache.dedupValues(this.values);
++    }
++
++    private <T> void createIndex(T[] keys, int[] indices, int mask, Collection<T> iterable) {
++        int index = 0;
++
++        for (T obj : iterable) {
++            int i = this.find(keys, mask, obj);
++
++            if (i < 0) {
++                int pos = -i - 1;
++
++                keys[pos] = obj;
++                indices[pos] = index++;
++            }
++        }
++    }
++
++    private <T> int getIndex(T[] keys, int[] indices, int mask, T key) {
++        int pos = this.find(keys, mask, key);
++
++        if (pos < 0) {
++            return -1;
++        }
++
++        return indices[pos];
++    }
++
++    @Override
++    public boolean contains(Object rowKey, Object columnKey) {
++        return this.get(rowKey, columnKey) != null;
++    }
++
++    @Override
++    public boolean containsRow(Object rowKey) {
++        return this.find(this.rowKeys, this.rowMask, rowKey) >= 0;
++    }
++
++    @Override
++    public boolean containsColumn(Object columnKey) {
++        return this.find(this.colKeys, this.colMask, columnKey) >= 0;
++    }
++
++    @Override
++    public boolean containsValue(Object value) {
++        return ArrayUtils.contains(this.values, value);
++    }
++
++    @Override
++    public V get(Object rowKey, Object columnKey) {
++        final int row = this.getIndex(this.rowKeys, this.rowIndices, this.rowMask, rowKey);
++        final int col = this.getIndex(this.colKeys, this.colIndices, this.colMask, columnKey);
++
++        if (row < 0 || col < 0) {
++            return null;
++        }
++
++        return this.values[this.colCount * row + col];
++    }
++
++    @Override
++    public boolean isEmpty() {
++        return this.size() == 0;
++    }
++
++    @Override
++    public int size() {
++        return this.size;
++    }
++
++    @Override
++    public void clear() {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public V put(R rowKey, C columnKey, V val) {
++        throw new UnsupportedOperationException();
++    }
++
++    private <T> int find(T[] key, int mask, T value) {
++        T curr;
++        int pos;
++        // The starting point.
++        if ((curr = key[pos = HashCommon.mix(value.hashCode()) & mask]) == null) {
++            return -(pos + 1);
++        }
++        if (value.equals(curr)) {
++            return pos;
++        }
++        // There's always an unused entry.
++        while (true) {
++            if ((curr = key[pos = pos + 1 & mask]) == null) {
++                return -(pos + 1);
++            }
++            if (value.equals(curr)) {
++                return pos;
++            }
++        }
++    }
++
++    @Override
++    public void putAll(Table<? extends R, ? extends C, ? extends V> table) {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public V remove(Object rowKey, Object columnKey) {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public Map<C, V> row(R rowKey) {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public Map<R, V> column(C columnKey) {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public Set<Cell<R, C, V>> cellSet() {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public Set<R> rowKeySet() {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public Set<C> columnKeySet() {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public Collection<V> values() {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public Map<R, Map<C, V>> rowMap() {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public Map<C, Map<R, V>> columnMap() {
++        throw new UnsupportedOperationException();
++    }
++}
+\ No newline at end of file
+diff --git a/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/FastImmutableTableCache.java b/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/FastImmutableTableCache.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..a9c5dbf37fb8106d58b5b767a2a584afee175d68
+--- /dev/null
++++ b/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/FastImmutableTableCache.java
+@@ -0,0 +1,43 @@
++package me.jellysquid.mods.lithium.common.util.collections.cache;
++import it.unimi.dsi.fastutil.Hash;
++import it.unimi.dsi.fastutil.ints.IntArrays;
++import it.unimi.dsi.fastutil.objects.ObjectArrays;
++import it.unimi.dsi.fastutil.objects.ObjectOpenCustomHashSet;
++
++/**
++ * @param <R> The type used by the
++ * @param <C>
++ * @param <V>
++ */
++public class FastImmutableTableCache<R, C, V> {
++    private final ObjectOpenCustomHashSet<R[]> rows;
++    private final ObjectOpenCustomHashSet<C[]> columns;
++    private final ObjectOpenCustomHashSet<V[]> values;
++
++    private final ObjectOpenCustomHashSet<int[]> indices;
++
++    @SuppressWarnings("unchecked")
++    public FastImmutableTableCache() {
++        this.rows = new ObjectOpenCustomHashSet<>((Hash.Strategy<R[]>) ObjectArrays.HASH_STRATEGY);
++        this.columns = new ObjectOpenCustomHashSet<>((Hash.Strategy<C[]>) ObjectArrays.HASH_STRATEGY);
++        this.values = new ObjectOpenCustomHashSet<>((Hash.Strategy<V[]>) ObjectArrays.HASH_STRATEGY);
++
++        this.indices = new ObjectOpenCustomHashSet<>(IntArrays.HASH_STRATEGY);
++    }
++
++    public synchronized V[] dedupValues(V[] values) {
++        return this.values.addOrGet(values);
++    }
++
++    public synchronized R[] dedupRows(R[] rows) {
++        return this.rows.addOrGet(rows);
++    }
++
++    public synchronized C[] dedupColumns(C[] columns) {
++        return this.columns.addOrGet(columns);
++    }
++
++    public synchronized int[] dedupIndices(int[] ints) {
++        return this.indices.addOrGet(ints);
++    }
++}
+\ No newline at end of file
+diff --git a/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/StatePropertyTableCache.java b/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/StatePropertyTableCache.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..415774ac575f9fa2a665ac1df6c2451e24273843
+--- /dev/null
++++ b/src/main/java/me/jellysquid/mods/lithium/common/util/collections/cache/StatePropertyTableCache.java
+@@ -0,0 +1,33 @@
++package me.jellysquid.mods.lithium.common.util.collections.cache;
++import net.minecraft.server.Block;
++import net.minecraft.server.Fluid;
++import net.minecraft.server.IBlockData;
++import net.minecraft.server.IBlockState;
++
++/**
++ * Many of the column and row key arrays in block state tables will be duplicated, leading to an unnecessary waste of
++ * memory. Since we have very limited options for trying to construct more optimized table types without throwing
++ * maintainability or mod compatibility out the window, this class acts as a dirty way to find and de-duplicate arrays
++ * after we construct our table types.
++ * <p>
++ * While this global cache does not provide the ability to remove or clear entries from it, the reality is that it
++ * shouldn't matter because block state tables are only initialized once and remain loaded for the entire lifetime of
++ * the game. Even in the event of classloader pre-boot shenanigans, we still shouldn't leak memory as our cache will be
++ * dropped along with the rest of the loaded classes when the class loader is reaped.
++ */
++public class StatePropertyTableCache {
++    public static final FastImmutableTableCache<IBlockState<?>, Comparable<?>, IBlockData> BLOCK_STATE_TABLE = new FastImmutableTableCache<>();
++
++    public static final FastImmutableTableCache<IBlockState<?>, Comparable<?>, Fluid> FLUID_STATE_TABLE = new FastImmutableTableCache<>();
++
++    @SuppressWarnings("unchecked")
++    public static <S, O> FastImmutableTableCache<IBlockState<?>, Comparable<?>, S> getTableCache(O owner) {
++        if (owner instanceof Block) {
++            return (FastImmutableTableCache<IBlockState<?>, Comparable<?>, S>) BLOCK_STATE_TABLE;
++        } else if (owner instanceof Fluid) {
++            return (FastImmutableTableCache<IBlockState<?>, Comparable<?>, S>) FLUID_STATE_TABLE;
++        } else {
++            throw new IllegalArgumentException("");
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/src/main/java/net/minecraft/server/BiomeStorage.java b/src/main/java/net/minecraft/server/BiomeStorage.java
+index 29f7988b3e8b79c11a32773e1a3e6e0ad61bccfa..88ce46d2f1006b1f7b1e3d02d93c7f480c758f5e 100644
+--- a/src/main/java/net/minecraft/server/BiomeStorage.java
++++ b/src/main/java/net/minecraft/server/BiomeStorage.java
+@@ -1,23 +1,32 @@
+ package net.minecraft.server;
+ 
+-import javax.annotation.Nullable;
++import it.unimi.dsi.fastutil.objects.Reference2ShortMap;
++import it.unimi.dsi.fastutil.objects.Reference2ShortOpenHashMap;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+ 
++import javax.annotation.Nullable;
++
+ public class BiomeStorage implements BiomeManager.Provider {
+ 
+     private static final Logger LOGGER = LogManager.getLogger();
+-    private static final int e = (int) Math.round(Math.log(16.0D) / Math.log(2.0D)) - 2;
++    private static final int e = (int) Math.round(Math.log(16.0D) / Math.log(2.0D)) - 2; public static int getWidthBits() { return e; } // Titanium - OBFHELPER
++
+     private static final int f = (int) Math.round(Math.log(256.0D) / Math.log(2.0D)) - 2;
+     public static final int a = 1 << BiomeStorage.e + BiomeStorage.e + BiomeStorage.f;
+-    public static final int b = (1 << BiomeStorage.e) - 1;
+-    public static final int c = (1 << BiomeStorage.f) - 1;
+-    public final Registry<BiomeBase> g; // PAIL
+-    private final BiomeBase[] h;
++    public static final int b = (1 << BiomeStorage.e) - 1; public static int getHorizontalMask() { return b; } // Titanium - OBFHELPER
++    public static final int c = (1 << BiomeStorage.f) - 1; public static int getVertialMask() { return c; } // Titanium - OBFHELPER
++    public final Registry<BiomeBase> g; public Registry<BiomeBase> getBiomeRegistry(){ return g; } // Titanium - OBFHELPER // PAIL
++
++    private BiomeBase[] h; public BiomeBase[] getBiomes() { return h; } // Titanium - OBFHELPER
++
++    private BiomeBase[] palette; private BiomeBase[] getPalette(){ return palette; } // Titanium - OBFHELPER
++    private DataBits intArray; private DataBits getIntArray(){ return intArray; } // Titanium - OBFHELPER
+ 
+     public BiomeStorage(Registry<BiomeBase> registry, BiomeBase[] abiomebase) {
+         this.g = registry;
+         this.h = abiomebase;
++        this.createCompact();
+     }
+ 
+     private BiomeStorage(Registry<BiomeBase> registry) {
+@@ -36,7 +45,7 @@ public class BiomeStorage implements BiomeManager.Provider {
+ 
+             this.h[k] = worldchunkmanager.getBiome(i + l, i1, j + j1);
+         }
+-
++        this.createCompact();
+     }
+ 
+     public BiomeStorage(Registry<BiomeBase> registry, ChunkCoordIntPair chunkcoordintpair, WorldChunkManager worldchunkmanager, @Nullable int[] aint) {
+@@ -66,26 +75,36 @@ public class BiomeStorage implements BiomeManager.Provider {
+                 this.h[k] = worldchunkmanager.getBiome(i + l, i1, j + j1);
+             }
+         }
++        this.createCompact();
+ 
+     }
+ 
+     public int[] a() {
+-        int[] aint = new int[this.h.length];
++        /*int[] aint = new int[this.getBiomes().length];
+ 
+-        for (int i = 0; i < this.h.length; ++i) {
+-            aint[i] = this.g.a(this.h[i]);
++        for (int i = 0; i < this.getBiomes().length; ++i) {
++            aint[i] = this.g.a(this.getBiomes()[i]);
+         }
+ 
+-        return aint;
++        return aint;*/
++        int size = this.getIntArray().b();
++        int[] array = new int[size];
++
++        for (int i = 0; i < size; ++i) {
++            array[i] = this.getBiomeRegistry().a(this.getPalette()[this.getIntArray().get(i)]);
++        }
++
++        return array;
+     }
+ 
+     @Override
+     public BiomeBase getBiome(int i, int j, int k) {
+-        int l = i & BiomeStorage.b;
++        /* int l = i & BiomeStorage.b;
+         int i1 = MathHelper.clamp(j, 0, BiomeStorage.c);
+         int j1 = k & BiomeStorage.b;
+ 
+-        return this.h[i1 << BiomeStorage.e + BiomeStorage.e | j1 << BiomeStorage.e | l];
++        return this.h[i1 << BiomeStorage.e + BiomeStorage.e | j1 << BiomeStorage.e | l];*/
++        return getBiomeForNoiseGen(i, j, k); // Titanium - Use our own optimised biome getter
+     }
+ 
+     // CraftBukkit start
+@@ -94,7 +113,89 @@ public class BiomeStorage implements BiomeManager.Provider {
+         int i1 = MathHelper.clamp(j, 0, BiomeStorage.c);
+         int j1 = k & BiomeStorage.b;
+ 
+-        this.h[i1 << BiomeStorage.e + BiomeStorage.e | j1 << BiomeStorage.e | l] = biome;
++        //this.h[i1 << BiomeStorage.e + BiomeStorage.e | j1 << BiomeStorage.e | l] = biome;
++        this.getPalette()[this.getIntArray().get(l << e + e | i1 << e | j1)] = biome;
+     }
+     // CraftBukkit end
++
++    // Titanium start - Port hydrogen to Spigot
++    private void createCompact() {
++        if (this.getIntArray() != null || this.getBiomes()[0] == null) {
++            return;
++        }
++
++        Reference2ShortOpenHashMap<BiomeBase> paletteTable = this.createPalette();
++        BiomeBase[] paletteIndexed = new BiomeBase[paletteTable.size()];
++
++        for (Reference2ShortMap.Entry<BiomeBase> entry : paletteTable.reference2ShortEntrySet()) {
++            paletteIndexed[entry.getShortValue()] = entry.getKey();
++        }
++
++        int packedIntSize = Math.max(2, MathHelper.e(paletteTable.size()));
++        DataBits integerArray = new DataBits(packedIntSize, a);
++
++        BiomeBase prevBiome = null;
++        short prevId = -1;
++
++        for (int i = 0; i < this.getBiomes().length; i++) {
++            BiomeBase biome = this.getBiomes()[i];
++            short id;
++
++            if (prevBiome == biome) {
++                id = prevId;
++            } else {
++                id = paletteTable.getShort(biome);
++
++                if (id < 0) {
++                    throw new IllegalStateException("Palette is missing entry: " + biome);
++                }
++
++                prevId = id;
++                prevBiome = biome;
++            }
++
++            integerArray.set(i, id);
++        }
++
++        this.palette = paletteIndexed;
++        this.intArray = integerArray;
++        this.h = null;
++    }
++
++    private Reference2ShortOpenHashMap<BiomeBase> createPalette() {
++        Reference2ShortOpenHashMap<BiomeBase> map = new Reference2ShortOpenHashMap<>();
++        map.defaultReturnValue(Short.MIN_VALUE);
++
++        BiomeBase prevObj = null;
++        short id = 0;
++
++        for (BiomeBase obj : this.getBiomes()) {
++            if (obj == prevObj) {
++                continue;
++            }
++
++            if (map.getShort(obj) < 0) {
++                map.put(obj, id ++);
++            }
++
++            prevObj = obj;
++        }
++
++        return map;
++    }
++
++
++    /**
++     * @author JellySquid
++     * @reason Use paletted lookup
++     */
++    public BiomeBase getBiomeForNoiseGen(int biomeX, int biomeY, int biomeZ) {
++        int x = biomeX & getHorizontalMask();
++        int y = MathHelper.clamp(biomeY, 0, getVertialMask());
++        int z = biomeZ & getHorizontalMask();
++
++        return this.getPalette()[this.getIntArray().get(y << getWidthBits() + getWidthBits() | z << getWidthBits() | x)];
++    }
++
++        // TitaniumMC end
+ }
+diff --git a/src/main/java/net/minecraft/server/Chunk.java b/src/main/java/net/minecraft/server/Chunk.java
+index 68881e700b0aad298c6655d1ddb2d47bc722047b..be9b3feeb7022e9477eee52a10b8b48efa1d48bd 100644
+--- a/src/main/java/net/minecraft/server/Chunk.java
++++ b/src/main/java/net/minecraft/server/Chunk.java
+@@ -7,6 +7,10 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import it.unimi.dsi.fastutil.longs.LongSet;
+ import it.unimi.dsi.fastutil.shorts.ShortList;
+ import it.unimi.dsi.fastutil.shorts.ShortListIterator;
++import org.apache.logging.log4j.LogManager;
++import org.apache.logging.log4j.Logger;
++
++import javax.annotation.Nullable;
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.Iterator;
+@@ -19,9 +23,6 @@ import java.util.function.Predicate;
+ import java.util.function.Supplier;
+ import java.util.stream.Stream;
+ import java.util.stream.StreamSupport;
+-import javax.annotation.Nullable;
+-import org.apache.logging.log4j.LogManager;
+-import org.apache.logging.log4j.Logger;
+ 
+ public class Chunk implements IChunkAccess {
+ 
+@@ -533,6 +534,13 @@ public class Chunk implements IChunkAccess {
+         this.b(protochunk.r());
+         this.s = true;
+         this.needsDecoration = true; // CraftBukkit
++        // Titanium Start - Upgrading a ProtoChunk to a Chunk might result in empty sections being copied over
++        // These simply waste memory, and the Chunk will return air blocks for any absent section without issue.
++        for (int i = 0; i < this.sections.length; i++) {
++            if (ChunkSection.isEmpty(this.sections[i])) {
++                this.sections[i] = null;
++            }
++        }
+     }
+ 
+     @Override
+diff --git a/src/main/java/net/minecraft/server/ChunkRegionLoader.java b/src/main/java/net/minecraft/server/ChunkRegionLoader.java
+index cda8847829a3a92869f0f12d74f54daa97c5e2a1..d304a7a4443ee4bf2e3740dd9b0a42cb03f753c8 100644
+--- a/src/main/java/net/minecraft/server/ChunkRegionLoader.java
++++ b/src/main/java/net/minecraft/server/ChunkRegionLoader.java
+@@ -1,12 +1,15 @@
+ package net.minecraft.server;
+ 
+-import co.aikar.timings.Timings;
+ import com.google.common.collect.Maps;
+ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import it.unimi.dsi.fastutil.longs.LongSet;
+ import it.unimi.dsi.fastutil.shorts.ShortList;
+ import it.unimi.dsi.fastutil.shorts.ShortListIterator;
+-import java.util.ArrayDeque; // Paper
++import org.apache.logging.log4j.LogManager;
++import org.apache.logging.log4j.Logger;
++
++import javax.annotation.Nullable;
++import java.util.ArrayDeque;
+ import java.util.Arrays;
+ import java.util.BitSet;
+ import java.util.EnumSet;
+@@ -16,9 +19,6 @@ import java.util.Map;
+ import java.util.Map.Entry;
+ import java.util.Objects;
+ import java.util.function.Function;
+-import javax.annotation.Nullable;
+-import org.apache.logging.log4j.LogManager;
+-import org.apache.logging.log4j.Logger;
+ 
+ public class ChunkRegionLoader {
+ 
+@@ -70,8 +70,10 @@ public class ChunkRegionLoader {
+     private static final String UNINITIALISED_SKYLIGHT_TAG = "starlight.skylight_uninit";
+     private static final String STARLIGHT_VERSION_TAG = "starlight.light_version";
+     // Tuinity end - rewrite light engine
++    private static final ThreadLocal<NBTTagCompound> CAPTURED_TAGS = new ThreadLocal<>();
+ 
+     public static InProgressChunkHolder loadChunk(WorldServer worldserver, DefinedStructureManager definedstructuremanager, VillagePlace villageplace, ChunkCoordIntPair chunkcoordintpair, NBTTagCompound nbttagcompound, boolean distinguish) {
++        CAPTURED_TAGS.set(nbttagcompound);
+         ArrayDeque<Runnable> tasksToExecuteOnMain = new ArrayDeque<>();
+         // Paper end
+         ChunkGenerator chunkgenerator = worldserver.getChunkProvider().getChunkGenerator();
+@@ -191,9 +193,15 @@ public class ChunkRegionLoader {
+                 object2 = protochunkticklist1;
+             }
+ 
++            NBTTagCompound strippedTag = new NBTTagCompound();
++            strippedTag.set("Entities", nbttagcompound1.getList("Entities", 10));
++            strippedTag.set("TileEntities", nbttagcompound1.getList("TileEntities", 10));
++            strippedTag.set("ChunkBukkitValues", nbttagcompound1.get("ChunkBukkitValues"));
++
+             object = new Chunk(worldserver.getMinecraftWorld(), chunkcoordintpair, biomestorage, chunkconverter, (TickList) object1, (TickList) object2, j, achunksection, // Paper start - fix massive nbt memory leak due to lambda. move lambda into a container method to not leak scope. Only clone needed NBT keys.
+-                createLoadEntitiesConsumer(new SafeNBTCopy(nbttagcompound1, "TileEntities", "Entities", "ChunkBukkitValues")) // Paper - move CB Chunk PDC into here
++                createLoadEntitiesConsumer(strippedTag) // Paper - move CB Chunk PDC into here
+             );// Paper end
++            CAPTURED_TAGS.remove();
+             ((Chunk)object).setBlockNibbles(blockNibbles); // Tuinity - replace light impl
+             ((Chunk)object).setSkyNibbles(skyNibbles); // Tuinity - replace light impl
+         } else {
+diff --git a/src/main/java/net/minecraft/server/IBlockDataHolder.java b/src/main/java/net/minecraft/server/IBlockDataHolder.java
+index b19c694cf01bc868dd7c4ec6432b613d19f2ca40..33d4b774c95380cb013d43ab52aa9a14ba5427d5 100644
+--- a/src/main/java/net/minecraft/server/IBlockDataHolder.java
++++ b/src/main/java/net/minecraft/server/IBlockDataHolder.java
+@@ -8,6 +8,9 @@ import com.google.common.collect.Table;
+ import com.google.common.collect.UnmodifiableIterator;
+ import com.mojang.serialization.Codec;
+ import com.mojang.serialization.MapCodec;
++import me.jellysquid.mods.lithium.common.util.collections.FastImmutableTable;
++import me.jellysquid.mods.lithium.common.util.collections.cache.StatePropertyTableCache;
++
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.Iterator;
+@@ -143,7 +146,7 @@ public abstract class IBlockDataHolder<O, S> {
+                 }
+             }
+ 
+-            this.e = (Table) (table.isEmpty() ? table : ArrayTable.create(table));
++            this.e = new FastImmutableTable<>((table.isEmpty() ? table : ArrayTable.create(table)), StatePropertyTableCache.getTableCache(this.c));
+         }
+     }
+ 
+diff --git a/src/main/java/net/minecraft/server/NBTTagCompound.java b/src/main/java/net/minecraft/server/NBTTagCompound.java
+index 06d5acab794e3ee139a11f9b068e8a359c46db2c..128bd5c7eec8c21c78364697939cfe9684f5072a 100644
+--- a/src/main/java/net/minecraft/server/NBTTagCompound.java
++++ b/src/main/java/net/minecraft/server/NBTTagCompound.java
+@@ -20,6 +20,8 @@ import java.util.Set;
+ import java.util.UUID;
+ import java.util.regex.Pattern;
+ import javax.annotation.Nullable;
++
++import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
+ import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap; // Paper
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+@@ -74,7 +76,7 @@ public class NBTTagCompound implements NBTBase {
+     public final Map<String, NBTBase> map; // Paper
+ 
+     protected NBTTagCompound(Map<String, NBTBase> map) {
+-        this.map = map;
++        this.map = map instanceof Object2ObjectMap ? map : new Object2ObjectOpenHashMap<>(map);
+     }
+ 
+     public NBTTagCompound() {
