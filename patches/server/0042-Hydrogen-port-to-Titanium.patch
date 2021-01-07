@@ -514,7 +514,7 @@ index 29f7988b3e8b79c11a32773e1a3e6e0ad61bccfa..88ce46d2f1006b1f7b1e3d02d93c7f48
 +        // TitaniumMC end
  }
 diff --git a/src/main/java/net/minecraft/server/Chunk.java b/src/main/java/net/minecraft/server/Chunk.java
-index 68881e700b0aad298c6655d1ddb2d47bc722047b..be9b3feeb7022e9477eee52a10b8b48efa1d48bd 100644
+index f538493b4a59891ec5cf79901526a92520321a67..142486a11cad62b7a1714979b35e655c0e4a70c0 100644
 --- a/src/main/java/net/minecraft/server/Chunk.java
 +++ b/src/main/java/net/minecraft/server/Chunk.java
 @@ -7,6 +7,10 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -553,7 +553,7 @@ index 68881e700b0aad298c6655d1ddb2d47bc722047b..be9b3feeb7022e9477eee52a10b8b48e
  
      @Override
 diff --git a/src/main/java/net/minecraft/server/ChunkRegionLoader.java b/src/main/java/net/minecraft/server/ChunkRegionLoader.java
-index cda8847829a3a92869f0f12d74f54daa97c5e2a1..d304a7a4443ee4bf2e3740dd9b0a42cb03f753c8 100644
+index 74056592041580fd747efe874f8931fb71cb553d..4e92a7f8b43acff76ca316a6a5a1484f80c0b0e1 100644
 --- a/src/main/java/net/minecraft/server/ChunkRegionLoader.java
 +++ b/src/main/java/net/minecraft/server/ChunkRegionLoader.java
 @@ -1,12 +1,15 @@
